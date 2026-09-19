@@ -26,10 +26,10 @@ class TelloDefendCameraEnvCfg(TelloDefendEnvCfg):
     camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Defender_0/front_cam",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.05, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros"),
-        data_types=["rgb", "distance_to_image_plane"],
+        data_types=["rgb"],  # depth adds a second annotator; re-enable once RGB is stable
         spawn=PinholeCameraCfg(focal_length=12.0, focus_distance=4.0, horizontal_aperture=21.6, clipping_range=(0.1, 30.0)),
-        width=160,
-        height=120,
+        width=320,
+        height=240,  # under ~300 px wide, Isaac Sim routes rendering through DLSS upscaling
     )
     enable_cameras = True
 

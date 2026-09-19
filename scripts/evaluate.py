@@ -69,7 +69,8 @@ def main():
 
         entry = f"skrl_{args_cli.algorithm.lower()}_cfg_entry_point"
         agent_cfg = load_cfg_from_registry(args_cli.task, entry)
-        wrapped = SkrlVecEnvWrapper(env, ml_framework="torch", algorithm=args_cli.algorithm.lower())
+        # the wrapper takes no algorithm argument; multi-agent envs stay multi-agent
+        wrapped = SkrlVecEnvWrapper(env, ml_framework="torch")
         runner = Runner(wrapped, agent_cfg)
         runner.agent.load(args_cli.checkpoint)
         if hasattr(runner.agent, "set_running_mode"):
@@ -89,10 +90,11 @@ def main():
     while episodes < args_cli.episodes:
         if policy is not None:
             with torch.inference_mode():
-                flat = torch.cat([obs[a] for a in env.cfg.possible_agents], dim=-1)
-                out = policy.act(flat, None, timestep=0, timesteps=0)[0]
-                chunks = torch.chunk(out, len(env.cfg.possible_agents), dim=-1)
-                actions = {a: chunks[i] for i, a in enumerate(env.cfg.possible_agents)}
+                # multi-agent skrl agents take and return dicts keyed by agent
+                outputs = policy.act(obs, None, timestep=0, timesteps=0)
+                actions = {
+                    a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.cfg.possible_agents
+                }
         elif args_cli.baseline == "chase":
             actions = chase_actions(env, obs)
         else:

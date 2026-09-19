@@ -70,6 +70,10 @@ class TelloDefendEnv(DirectMARLEnv):
             self._attackers.append(obj)
 
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
+        # Sensors must exist before cloning: the clone creates their per-env prims, and
+        # attaching render annotators after the fact fails inside Replicator with
+        # "Unable to write from unknown dtype".
+        self._setup_extra_sensors()
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[])
@@ -85,6 +89,10 @@ class TelloDefendEnv(DirectMARLEnv):
         marker_cfg.markers["cuboid"].size = (self.cfg.site_radius, self.cfg.site_radius, 0.05)
         marker_cfg.prim_path = "/Visuals/site"
         self._site_markers = VisualizationMarkers(marker_cfg)
+
+    def _setup_extra_sensors(self) -> None:
+        """Hook for subclasses to add sensors. Called before the scene is cloned."""
+        return
 
     # -- stepping ---------------------------------------------------------------
 
@@ -151,10 +159,12 @@ class TelloDefendEnv(DirectMARLEnv):
             own_rel_site = drone.data.root_pos_w - site
             rel_pos = attacker_pos - drone.data.root_pos_w.unsqueeze(1)
             rel_vel = attacker_vel - drone.data.root_lin_vel_w.unsqueeze(1)
-            # a downed attacker is reported far away so it stops attracting attention
-            mask = self._attacker_alive.unsqueeze(-1).float()
-            rel_pos = rel_pos * mask + (1.0 - mask) * 100.0
-            rel_vel = rel_vel * mask
+            # A downed attacker is zeroed out and flagged, not pushed to a huge sentinel
+            # value: a 100 m spike dominates the running normalisation and destabilises
+            # the policy. The flag tells the network the slot is empty.
+            alive = self._attacker_alive.float().unsqueeze(-1)
+            rel_pos = rel_pos.clamp(-self.cfg.obs_clip_pos, self.cfg.obs_clip_pos) * alive
+            rel_vel = rel_vel.clamp(-self.cfg.obs_clip_vel, self.cfg.obs_clip_vel) * alive
             obs[f"defender_{i}"] = torch.cat(
                 [
                     own_rel_site,
@@ -162,6 +172,7 @@ class TelloDefendEnv(DirectMARLEnv):
                     drone.data.projected_gravity_b,
                     rel_pos.reshape(self.num_envs, -1),
                     rel_vel.reshape(self.num_envs, -1),
+                    alive.squeeze(-1),
                 ],
                 dim=-1,
             )
@@ -194,23 +205,34 @@ class TelloDefendEnv(DirectMARLEnv):
         rewards = {}
         for i, drone in enumerate(self._defenders):
             dist = torch.linalg.norm(attacker_pos - drone.data.root_pos_w.unsqueeze(1), dim=-1)
-            dist = torch.where(self._attacker_alive, dist, torch.full_like(dist, 1e3))
+            any_alive = self._attacker_alive.any(dim=-1)
+            dist = torch.where(self._attacker_alive, dist, torch.full_like(dist, float("inf")))
             nearest = dist.min(dim=-1).values
+            # With no live attacker left there is no distance to close. Carrying the
+            # previous value keeps `closing` at zero instead of swinging to the clamp,
+            # which otherwise punishes the defender for the capture it just made.
+            nearest = torch.where(any_alive, nearest, self._prev_distance[:, i])
             closing = self._prev_distance[:, i] - nearest
-            closing = torch.where(torch.isfinite(closing), closing, torch.zeros_like(closing))
             self._prev_distance[:, i] = nearest
             effort = torch.sum(torch.square(self._actions[f"defender_{i}"]), dim=-1)
-            proximity = torch.exp(-nearest.clamp(max=1e3) / self.cfg.spawn_radius)
-            # Continuous terms are scaled by step_dt, event terms are not. Without this,
-            # per-step income (proximity + alive) over a 400-step episode dwarfs the
-            # capture bonus, and clearing every attacker -- which ends the episode --
-            # costs more future reward than it pays. Stalling then beats defending.
+            proximity = torch.exp(-nearest.clamp(min=0.0, max=self.cfg.spawn_radius * 2.0) / self.cfg.spawn_radius)
+            # Rates are scaled by step_dt; per-step deltas are not.
+            #
+            # proximity/alive/effort are rates (value per second), so without step_dt
+            # their income over a 400-step episode dwarfs the capture bonus, and
+            # clearing the field -- which ends the episode -- costs more future reward
+            # than it pays, making stalling optimal.
+            #
+            # closing is already a per-step distance delta in metres. Scaling it by
+            # step_dt as well shrinks the dense signal ~60x, leaving PPO with almost
+            # nothing to follow between sparse captures. It telescopes over an episode
+            # to (start distance - end distance), so at scale 5 a full 5 m approach is
+            # worth ~25, comparable to one capture.
             shaping = (
-                self.cfg.rew_scale_closing * closing.clamp(-1.0, 1.0)
-                + self.cfg.rew_scale_proximity * proximity
+                self.cfg.rew_scale_proximity * proximity
                 + self.cfg.rew_scale_effort * effort
                 + self.cfg.rew_scale_alive
-            ) * self.step_dt
+            ) * self.step_dt + self.cfg.rew_scale_closing * closing.clamp(-1.0, 1.0)
             events = (
                 self.cfg.rew_scale_capture * defender_credit[:, i]
                 + self.cfg.rew_scale_breach * self._breached.float()

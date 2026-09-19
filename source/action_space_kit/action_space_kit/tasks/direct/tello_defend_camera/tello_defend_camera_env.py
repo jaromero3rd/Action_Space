@@ -34,8 +34,8 @@ class TelloDefendCameraEnv(TelloDefendEnv):
         ]
         self._forward_b = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
 
-    def _setup_scene(self):
-        super()._setup_scene()
+    def _setup_extra_sensors(self) -> None:
+        # Runs before the scene is cloned, which is when per-env camera prims appear.
         self._camera = TiledCamera(self.cfg.camera)
         self.scene.sensors["camera"] = self._camera
 
@@ -67,9 +67,11 @@ class TelloDefendCameraEnv(TelloDefendEnv):
 
             rel_pos = track_pos - drone.data.root_pos_w.unsqueeze(1)
             rel_vel = track_vel - drone.data.root_lin_vel_w.unsqueeze(1)
+            # Same encoding as the state-based task: zero out untracked slots and flag
+            # them, so the policy can transfer between the two observation modes.
             mask = active.unsqueeze(-1).float()
-            rel_pos = rel_pos * mask + (1.0 - mask) * 100.0
-            rel_vel = rel_vel * mask
+            rel_pos = rel_pos.clamp(-self.cfg.obs_clip_pos, self.cfg.obs_clip_pos) * mask
+            rel_vel = rel_vel.clamp(-self.cfg.obs_clip_vel, self.cfg.obs_clip_vel) * mask
 
             obs[f"defender_{i}"] = torch.cat(
                 [
@@ -78,6 +80,7 @@ class TelloDefendCameraEnv(TelloDefendEnv):
                     drone.data.projected_gravity_b,
                     rel_pos.reshape(self.num_envs, -1),
                     rel_vel.reshape(self.num_envs, -1),
+                    mask.squeeze(-1),
                 ],
                 dim=-1,
             )

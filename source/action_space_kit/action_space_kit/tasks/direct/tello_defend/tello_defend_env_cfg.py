@@ -12,8 +12,9 @@ from action_space_kit.control import TelloCommandCfg
 NUM_DEFENDERS = 2
 NUM_ATTACKERS = 2
 
-# obs per defender: own pos rel. site (3) + own vel (3) + gravity (3) + per attacker (rel pos 3, rel vel 3)
-_OBS_DIM = 9 + 6 * NUM_ATTACKERS
+# obs per defender: own pos rel. site (3) + own vel (3) + gravity (3)
+#                 + per attacker (rel pos 3, rel vel 3, visible flag 1)
+_OBS_DIM = 9 + 7 * NUM_ATTACKERS
 
 
 @configclass
@@ -51,6 +52,8 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     spawn_radius = 6.0  # [m] where attackers enter from
     defender_radius = 2.5  # [m] where defenders start, around the site
     capture_radius = 0.35  # [m] distance counting as an interception
+    obs_clip_pos = 12.0  # [m] relative positions are clipped to this before normalisation
+    obs_clip_vel = 3.0  # [m/s] relative velocities are clipped to this
     trainable_attackers = False
 
     # - scripted attacker behaviour (curriculum stage 0 = straight dive)
