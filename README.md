@@ -1,135 +1,97 @@
-# Template for Isaac Lab Projects
+# Action Space Kit
 
-## Overview
+Isaac Lab starter kit for the **Action Space** anti-drone swarm defense hackathon
+(Oct 23-25, Microsoft NERD, Cambridge MA). Train defender policies in simulation on day
+one, fly them on real Tello EDU drones on day two.
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+## The one rule that makes day two work
 
-**Key Features:**
+A real Tello EDU accepts only high-level commands over its SDK: `takeoff`, `land`,
+`go x y z`, and `rc a b c d` -- four velocity channels, each -100..100, roughly +/-1 m/s.
+**There is no motor-level control.** Isaac Lab's built-in quadcopter task commands body
+thrust and torque, so a policy trained on it can never fly a Tello.
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
+Every task here acts through `action_space_kit.control.TelloVelocityController`, whose
+action vector maps 1:1 onto the four `rc` channels:
 
-**Keywords:** extension, template, isaaclab
+```
+action = [vx, vy, vz, yaw_rate], each in [-1, 1]
+   vx -> rc b (forward+)    vy -> rc a (left+)
+   vz -> rc c (up+)         yaw_rate -> rc d (clockwise+)
+```
 
-## Installation
+If you write your own task, keep that action space and your policy stays flyable.
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
+## Tasks
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
+| Task | Type | What it is |
+|---|---|---|
+| `AS-Tello-Hover-v0` | single-agent | Hold a sampled position. Start here; trains in minutes. |
+| `AS-Tello-Waypoint-v0` | single-agent | Chase a moving goal -- the basis of pursuit. |
+| `AS-Defend-v0` | multi-agent | The hackathon scenario: defenders intercept attackers before they reach the protected site. |
 
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+List them yourself with `python scripts/list_envs.py`.
 
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/action_space_kit
-
-- Verify that the extension is correctly installed by:
-
-    - Listing the available tasks:
-
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
-
-    - Running a task:
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
-
-    - Running a task with dummy agents:
-
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
-
-        - Zero-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
-            ```
-        - Random-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
-            ```
-
-### Set up IDE (Optional)
-
-To setup the IDE, please follow these instructions:
-
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
-
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
-
-### Setup as Omniverse Extension (Optional)
-
-We provide an example UI extension that will load upon enabling your extension defined in `source/action_space_kit/action_space_kit/ui_extension_example.py`.
-
-To enable your extension, follow these steps:
-
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
-
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
-
-## Code formatting
-
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
+## Quickstart
 
 ```bash
-pip install pre-commit
+# on the shared server
+cd /mnt/data/isaac/action_space_kit
+source /mnt/data/isaac/env_isaaclab/bin/activate
+export OMNI_KIT_ACCEPT_EULA=YES
+
+# 1. hover: ~10 min on an A10G, reward should climb from ~15 to ~70
+python scripts/skrl/train.py --task AS-Tello-Hover-v0 --headless --num_envs 1024 --max_iterations 200
+
+# 2. watch the trained policy
+python scripts/skrl/play.py --task AS-Tello-Hover-v0 --headless --num_envs 16
+
+# 3. the hackathon task, multi-agent PPO
+python scripts/skrl/train.py --task AS-Defend-v0 --algorithm IPPO --headless --num_envs 512 --max_iterations 500
 ```
 
-Then you can run pre-commit with:
+`--algorithm` accepts `IPPO` (each defender learns independently) or `MAPPO` (shared
+critic, usually better coordination). Metrics land in `logs/skrl/<task>/<run>/`; view them
+with `tensorboard --logdir logs`.
+
+## Tuning the defend task
+
+Everything worth changing is in
+`source/action_space_kit/action_space_kit/tasks/direct/tello_defend/tello_defend_env_cfg.py`:
+
+- `num_defenders`, `num_attackers` -- team sizes (2 v 2 by default)
+- `site_radius`, `spawn_radius`, `capture_radius` -- the geometry of the scenario
+- `attacker_speed`, `attacker_evasion` -- attacker difficulty; `evasion = 0` is a straight
+  dive, raise it towards 1 for weaving. This is your curriculum.
+- `trainable_attackers` -- set True to train both sides instead of scripted attackers
+- `rew_scale_*` -- reward weights: closing distance, interception, perimeter breach,
+  control effort
+
+## Flying on real drones
 
 ```bash
-pre-commit run --all-files
+# no hardware needed: prints the exact rc commands it would send
+python -m action_space_kit.bridge.tello_bridge --dry-run --duration 3
 ```
 
-## Troubleshooting
+`TelloBridge` sends policy actions as `rc` commands at a fixed rate with a geofence, a
+speed cap, a dead-man timeout, and `land` on any error. Start every session with
+`--dry-run`, then one drone, then a swarm. Tello EDU supports station mode, so several
+drones can fly from one computer on the same WiFi network.
 
-### Pylance Missing Indexing of Extensions
+## Sim-to-real checklist
 
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
+1. Same action space: `[vx, vy, vz, yaw_rate]`, nothing lower level.
+2. Keep `speed_cap` at 0.5 or below indoors -- the sim has no walls, your venue does.
+3. Expect 0.1-0.3 s of latency on real hardware; train with
+   `TelloCommandCfg.command_latency_steps > 0` if your policy is twitchy.
+4. The drone auto-lands after 15 s without a command; the bridge's timeout is shorter.
+5. Battery sag makes a real Tello slower than the sim near the end of a flight.
 
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-ext-repo>/source/action_space_kit"
-    ]
-}
-```
+## Docs
 
-### Pylance Crash
-
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
-
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
-...
-```
+- [`docs/shared-server.md`](docs/shared-server.md) -- using the shared GPU box without
+  stepping on other teams
+- [`docs/livestream.md`](docs/livestream.md) -- watching the sim from your laptop
+- [`THIRD_PARTY.md`](THIRD_PARTY.md) -- the Tello model's BSD-3 licence and attribution
+- [`docs/template_readme.md`](docs/template_readme.md) -- the original Isaac Lab template README
