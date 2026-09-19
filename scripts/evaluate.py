@@ -84,6 +84,7 @@ def main():
     intercept_times: list[float] = []
     alive_prev = env._attacker_alive.clone()
     step_in_episode = torch.zeros(env.num_envs, device=env.device)
+    episode_intercept_times: list[list[float]] = [[] for _ in range(env.num_envs)]
 
     while episodes < args_cli.episodes:
         if policy is not None:
@@ -102,19 +103,21 @@ def main():
 
         newly_down = alive_prev & ~env._attacker_alive
         if newly_down.any():
-            intercepted += int(newly_down.sum().item())
-            rows = newly_down.any(dim=-1).nonzero(as_tuple=False).flatten()
-            intercept_times += (step_in_episode[rows] * env.step_dt).tolist()
+            for row in newly_down.any(dim=-1).nonzero(as_tuple=False).flatten().tolist():
+                episode_intercept_times[row].append(step_in_episode[row].item() * env.step_dt)
         alive_prev = env._attacker_alive.clone()
 
-        agent0 = env.cfg.possible_agents[0]
-        done = terminated[agent0] | truncated[agent0]
-        if done.any():
-            rows = done.nonzero(as_tuple=False).flatten()
-            episodes += len(rows)
-            breaches += int(env._breached[rows].sum().item())
-            attacker_slots += len(rows) * env.cfg.num_attackers
-            step_in_episode[rows] = 0.0
+        # outcomes are latched by the env before its auto-reset clears them
+        finished = env.outcome_valid.nonzero(as_tuple=False).flatten()
+        if len(finished):
+            episodes += len(finished)
+            breaches += int(env.outcome_breached[finished].sum().item())
+            intercepted += int(env.outcome_captures[finished].sum().item())
+            attacker_slots += len(finished) * env.cfg.num_attackers
+            for row in finished.tolist():
+                intercept_times += episode_intercept_times[row]
+                episode_intercept_times[row] = []
+            step_in_episode[finished] = 0.0
 
     label = args_cli.checkpoint or f"baseline:{args_cli.baseline or zero}"
     print("\n=== %s on %s ===" % (label, args_cli.task), flush=True)

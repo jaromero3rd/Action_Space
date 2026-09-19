@@ -48,6 +48,12 @@ class TelloDefendEnv(DirectMARLEnv):
         self._attacker_speed = torch.zeros(self.num_envs, self.cfg.num_attackers, device=self.device)
         self._breached = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._prev_distance = torch.zeros(self.num_envs, self.cfg.num_defenders, device=self.device)
+        # Episode outcome, latched in _get_dones before Isaac Lab resets the environment.
+        # Reading _breached after env.step() is too late: the reset has already cleared it.
+        self._episode_captures = torch.zeros(self.num_envs, device=self.device)
+        self.outcome_breached = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.outcome_captures = torch.zeros(self.num_envs, device=self.device)
+        self.outcome_valid = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
     # -- scene ------------------------------------------------------------------
 
@@ -181,6 +187,10 @@ class TelloDefendEnv(DirectMARLEnv):
         inside = (radial < self.cfg.site_radius) & self._attacker_alive
         self._breached = inside.any(dim=-1)
 
+        # every attacker down this step: the outcome the task actually wants
+        cleared = captured.any(dim=-1) & ~self._attacker_alive.any(dim=-1)
+        self._episode_captures += captured.float().sum(dim=-1)
+
         rewards = {}
         for i, drone in enumerate(self._defenders):
             dist = torch.linalg.norm(attacker_pos - drone.data.root_pos_w.unsqueeze(1), dim=-1)
@@ -191,20 +201,32 @@ class TelloDefendEnv(DirectMARLEnv):
             self._prev_distance[:, i] = nearest
             effort = torch.sum(torch.square(self._actions[f"defender_{i}"]), dim=-1)
             proximity = torch.exp(-nearest.clamp(max=1e3) / self.cfg.spawn_radius)
-            rewards[f"defender_{i}"] = (
+            # Continuous terms are scaled by step_dt, event terms are not. Without this,
+            # per-step income (proximity + alive) over a 400-step episode dwarfs the
+            # capture bonus, and clearing every attacker -- which ends the episode --
+            # costs more future reward than it pays. Stalling then beats defending.
+            shaping = (
                 self.cfg.rew_scale_closing * closing.clamp(-1.0, 1.0)
                 + self.cfg.rew_scale_proximity * proximity
-                + self.cfg.rew_scale_capture * defender_credit[:, i]
-                + self.cfg.rew_scale_breach * self._breached.float()
                 + self.cfg.rew_scale_effort * effort
                 + self.cfg.rew_scale_alive
+            ) * self.step_dt
+            events = (
+                self.cfg.rew_scale_capture * defender_credit[:, i]
+                + self.cfg.rew_scale_breach * self._breached.float()
+                + self.cfg.rew_scale_cleared * cleared.float()
             )
+            rewards[f"defender_{i}"] = shaping + events
         return rewards
 
     def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         all_down = ~self._attacker_alive.any(dim=-1)
         done = self._breached | all_down
+        finished = done | time_out
+        self.outcome_valid = finished
+        self.outcome_breached = torch.where(finished, self._breached, self.outcome_breached)
+        self.outcome_captures = torch.where(finished, self._episode_captures, self.outcome_captures)
         terminated = {agent: done for agent in self.cfg.possible_agents}
         time_outs = {agent: time_out for agent in self.cfg.possible_agents}
         return terminated, time_outs
@@ -245,6 +267,7 @@ class TelloDefendEnv(DirectMARLEnv):
             self.cfg.attacker_speed[0], self.cfg.attacker_speed[1], (num, self.cfg.num_attackers), self.device
         )
         self._breached[env_ids] = False
+        self._episode_captures[env_ids] = 0.0
         for agent in self.cfg.possible_agents:
             self._actions[agent][env_ids] = 0.0
         self._prev_distance[env_ids] = self.cfg.spawn_radius

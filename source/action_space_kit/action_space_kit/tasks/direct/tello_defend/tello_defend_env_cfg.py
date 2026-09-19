@@ -65,6 +65,7 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
     rew_scale_closing = 5.0  # getting nearer its target attacker
     rew_scale_proximity = 2.0  # continuous pull towards the nearest attacker
     rew_scale_capture = 30.0  # intercepting one
+    rew_scale_cleared = 30.0  # bonus for downing the last attacker, so winning beats stalling
     rew_scale_breach = -20.0  # an attacker reaching the site (shared)
     rew_scale_effort = -0.01
     rew_scale_alive = 0.1

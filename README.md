@@ -71,6 +71,18 @@ python scripts/evaluate.py --task AS-Defend-v0 --checkpoint logs/skrl/tello_defe
 A policy that cannot beat `--baseline chase` (greedy pursuit of the nearest attacker) is
 not yet worth flying.
 
+### Baselines to beat (AS-Defend-v0 defaults, 2 defenders vs 2 attackers)
+
+| Policy | Interceptions | Breaches | Time to intercept | Episode return* |
+|---|---|---|---|---|
+| `zero` (do nothing) | 0% | 100% | n/a | -60.4 |
+| `chase` (greedy pursuit) | 100% | 0% | 3.4 s | +83.0 |
+
+*Episode return sums both defenders, matching what the training logger reports. If your
+training curve sits near -60, the policy has not learned to engage yet; near +83 it is
+doing about as well as greedy pursuit, and beating that means coordinating -- splitting
+targets rather than both chasing the nearest attacker.
+
 ## Tuning the defend task
 
 Everything worth changing is in
