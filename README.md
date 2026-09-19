@@ -54,6 +54,23 @@ python scripts/skrl/train.py --task AS-Defend-v0 --algorithm IPPO --headless --n
 critic, usually better coordination). Metrics land in `logs/skrl/<task>/<run>/`; view them
 with `tensorboard --logdir logs`.
 
+## Measuring whether it actually defends
+
+Training curves say little about the thing that matters on day two. `scripts/evaluate.py`
+runs whole episodes and reports interception rate, breach rate and time-to-intercept:
+
+```bash
+# baselines first, so you know what a policy has to beat
+python scripts/evaluate.py --task AS-Defend-v0 --baseline zero  --episodes 20
+python scripts/evaluate.py --task AS-Defend-v0 --baseline chase --episodes 20
+
+# then your trained policy
+python scripts/evaluate.py --task AS-Defend-v0 --checkpoint logs/skrl/tello_defend/<run>/checkpoints/best_agent.pt
+```
+
+A policy that cannot beat `--baseline chase` (greedy pursuit of the nearest attacker) is
+not yet worth flying.
+
 ## Tuning the defend task
 
 Everything worth changing is in
