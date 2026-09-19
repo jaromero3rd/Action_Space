@@ -77,3 +77,6 @@ tests/
 # training output
 logs/
 outputs/
+
+# editor/patch leftovers
+*.bak
