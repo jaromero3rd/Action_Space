@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gymnasium as gym
 import torch
 from collections.abc import Sequence
 
@@ -32,7 +33,9 @@ class TelloHoverEnv(DirectRLEnv):
             inertia_zz=inertia_zz,
             device=self.device,
         )
-        self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
+        # action_space may be an int or a gym space; flatdim handles both
+        action_dim = gym.spaces.flatdim(self.single_action_space)
+        self._actions = torch.zeros(self.num_envs, action_dim, device=self.device)
         self._previous_actions = torch.zeros_like(self._actions)
         self._goal_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
 

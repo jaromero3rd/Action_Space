@@ -30,9 +30,14 @@ parser.add_argument(
     help="Evaluate a scripted baseline instead of a checkpoint: zero does nothing, chase pursues the nearest attacker.",
 )
 parser.add_argument("--algorithm", type=str, default="IPPO", choices=["IPPO", "MAPPO"], help="Algorithm of the checkpoint.")
+parser.add_argument("--video", action="store_true", default=False, help="Record a video of the run.")
+parser.add_argument("--video_length", type=int, default=400, help="Video length in steps.")
+parser.add_argument("--video_dir", type=str, default="videos/evaluate", help="Where to write the video.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
+if args_cli.video:
+    args_cli.enable_cameras = True  # rendering is needed to capture frames
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -44,22 +49,36 @@ import action_space_kit.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 
-def chase_actions(env, obs):
+def chase_actions(raw, obs):
     """Head straight at the nearest tracked attacker -- the baseline to beat."""
     actions = {}
-    num_attackers = env.cfg.num_attackers
-    for agent in env.cfg.possible_agents:
-        rel = obs[agent][:, 9 : 9 + 3 * num_attackers].reshape(env.num_envs, num_attackers, 3)
+    num_attackers = raw.cfg.num_attackers
+    for agent in raw.cfg.possible_agents:
+        rel = obs[agent][:, 9 : 9 + 3 * num_attackers].reshape(raw.num_envs, num_attackers, 3)
         distance = torch.linalg.norm(rel, dim=-1)
-        target = rel[torch.arange(env.num_envs, device=env.device), distance.argmin(dim=-1)]
+        target = rel[torch.arange(raw.num_envs, device=raw.device), distance.argmin(dim=-1)]
         direction = target / torch.clamp(torch.linalg.norm(target, dim=-1, keepdim=True), min=1e-6)
-        actions[agent] = torch.cat([direction, torch.zeros(env.num_envs, 1, device=env.device)], dim=-1)
+        actions[agent] = torch.cat([direction, torch.zeros(raw.num_envs, 1, device=raw.device)], dim=-1)
     return actions
 
 
 def main():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    if args_cli.video:
+        import os
+
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_folder=os.path.abspath(args_cli.video_dir),
+            step_trigger=lambda step: step == 0,
+            video_length=args_cli.video_length,
+            disable_logger=True,
+        )
+        print(f"[evaluate] recording {args_cli.video_length} steps to {args_cli.video_dir}", flush=True)
+    env = env.unwrapped if not args_cli.video else env
+
+    raw = env.unwrapped  # RecordVideo wraps the env; outcome buffers live on the raw one
 
     policy = None
     if args_cli.checkpoint:
@@ -83,41 +102,41 @@ def main():
     episodes = breaches = 0
     intercepted = attacker_slots = 0
     intercept_times: list[float] = []
-    alive_prev = env._attacker_alive.clone()
-    step_in_episode = torch.zeros(env.num_envs, device=env.device)
-    episode_intercept_times: list[list[float]] = [[] for _ in range(env.num_envs)]
+    alive_prev = raw._attacker_alive.clone()
+    step_in_episode = torch.zeros(raw.num_envs, device=raw.device)
+    episode_intercept_times: list[list[float]] = [[] for _ in range(raw.num_envs)]
 
     while episodes < args_cli.episodes:
         if policy is not None:
             with torch.inference_mode():
                 # multi-agent skrl agents take and return dicts keyed by agent, and
                 # they index states[agent_id], so the states argument must be a dict too
-                states = {agent: None for agent in env.cfg.possible_agents}
+                states = {agent: None for agent in raw.cfg.possible_agents}
                 outputs = policy.act(obs, states, timestep=0, timesteps=0)
                 actions = {
-                    a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.cfg.possible_agents
+                    a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in raw.cfg.possible_agents
                 }
         elif args_cli.baseline == "chase":
-            actions = chase_actions(env, obs)
+            actions = chase_actions(raw, obs)
         else:
-            actions = {a: torch.zeros(env.num_envs, 4, device=env.device) for a in env.cfg.possible_agents}
+            actions = {a: torch.zeros(raw.num_envs, 4, device=raw.device) for a in raw.cfg.possible_agents}
 
         obs, _, terminated, truncated, _ = env.step(actions)
         step_in_episode += 1
 
-        newly_down = alive_prev & ~env._attacker_alive
+        newly_down = alive_prev & ~raw._attacker_alive
         if newly_down.any():
             for row in newly_down.any(dim=-1).nonzero(as_tuple=False).flatten().tolist():
-                episode_intercept_times[row].append(step_in_episode[row].item() * env.step_dt)
-        alive_prev = env._attacker_alive.clone()
+                episode_intercept_times[row].append(step_in_episode[row].item() * raw.step_dt)
+        alive_prev = raw._attacker_alive.clone()
 
         # outcomes are latched by the env before its auto-reset clears them
-        finished = env.outcome_valid.nonzero(as_tuple=False).flatten()
+        finished = raw.outcome_valid.nonzero(as_tuple=False).flatten()
         if len(finished):
             episodes += len(finished)
-            breaches += int(env.outcome_breached[finished].sum().item())
-            intercepted += int(env.outcome_captures[finished].sum().item())
-            attacker_slots += len(finished) * env.cfg.num_attackers
+            breaches += int(raw.outcome_breached[finished].sum().item())
+            intercepted += int(raw.outcome_captures[finished].sum().item())
+            attacker_slots += len(finished) * raw.cfg.num_attackers
             for row in finished.tolist():
                 intercept_times += episode_intercept_times[row]
                 episode_intercept_times[row] = []
