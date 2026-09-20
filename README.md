@@ -171,6 +171,14 @@ stitching them with ffmpeg, bypassing Replicator entirely:
 python scripts/record_clip.py --frames 150 --out /mnt/data/isaac/videos/defend_chase.mp4
 ```
 
+Two things that look like bugs but are not:
+
+- The recorder launches with **livestream mode on**. In plain headless mode Isaac Lab sets
+  `/isaaclab/render/active_viewport` to false and leaves the viewport context unset, so
+  captures silently produce no files. Livestream keeps the viewport pipeline alive.
+- Frames are stitched **before** the simulator is closed, because `simulation_app.close()`
+  exits the process and anything after it never runs.
+
 The livestream (`isaaclab-stream.sh`, or `--livestream 1`) works for the same reason. What
 stays blocked is anything needing camera *sensors* as policy input -- `AS-Defend-Camera-v0`
 and training a detector -- since those read through Replicator. State-based training is
