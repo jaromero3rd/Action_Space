@@ -83,6 +83,71 @@ training curve sits near -60, the policy has not learned to engage yet; near +83
 doing about as well as greedy pursuit, and beating that means coordinating -- splitting
 targets rather than both chasing the nearest attacker.
 
+## Known issue: PPO converges to passivity on the default difficulty
+
+Out of the box, both IPPO and single-agent PPO drift *below* the do-nothing baseline on
+`AS-Defend-v0` and end up flying nowhere. This is the interesting part of the hackathon,
+not a broken environment -- the environment itself is verified:
+
+- scripted greedy pursuit (`--baseline chase`) intercepts **100%** of attackers with
+  **0%** breaches, so a good policy exists inside the action space
+- the reward separates those cases cleanly: **-26.2** for doing nothing, **+135.7** for
+  greedy pursuit (both-agent episode totals, as the training logger reports them)
+- actions, observations and termination were each checked in isolation
+
+What was already ruled out, so you do not repeat it:
+
+| Suspected cause | Verdict |
+|---|---|
+| Reward scale (breach dwarfing shaping) | fixed, still diverged |
+| Rates vs per-step deltas scaled wrongly | fixed, still diverged |
+| Sentinel observations (100.0 for unseen targets) | fixed, still diverged |
+| Network too small, optimiser settings | set to Isaac Lab reference values, still diverged |
+| Multi-agent machinery | single-agent PPO diverges identically |
+| Entropy collapse | ruled out: policy std decays normally (1.0 -> 0.4) |
+| Unclipped actions inflating the policy std | real bug, fixed (std now stable at ~0.88) |
+
+The most likely remaining explanation is **discovery**: with a 0.35 m capture radius,
+random exploration almost never produces an interception, so the policy sees no positive
+signal and settles for minimising penalties. The intended fix is a curriculum -- start
+easy, then tighten:
+
+```bash
+# easier: bigger capture radius, closer and slower attackers
+python scripts/skrl/train.py --task AS-Defend-v0 --algorithm IPPO --headless \
+  --num_envs 512 --max_iterations 300 \
+  env.capture_radius=1.0 env.spawn_radius=4.0 env.attacker_speed=[0.2,0.4]
+```
+
+Then retrain from that checkpoint with the values stepped back towards the defaults
+(`capture_radius` 0.35, `spawn_radius` 6.0, `attacker_speed` [0.4, 0.9]). Other levers
+worth trying: reward the defender for staying between the attacker and the site, give
+each defender its own assigned target instead of the nearest one, or warm-start from
+behaviour cloning on the `chase` baseline.
+
+## Known issue: camera rendering fails on this server
+
+`AS-Defend-Camera-v0` currently fails at startup with:
+
+```
+TypeError: Unable to write from unknown dtype, kind=f, size=0
+```
+
+raised inside Omniverse Replicator while attaching render annotators. **This is not the
+task's fault**: Isaac Lab's own `Isaac-Cartpole-RGB-Camera-Direct-v0` fails identically on
+the same machine. The logs show Isaac Sim never producing the `LdrColorSD` render
+variable, i.e. rendering itself is not working on this headless instance, which runs the
+NVIDIA cloud-gaming (GRID) driver with no display attached.
+
+Things already tried that did **not** help: creating the sensor before the scene is
+cloned, attaching the camera to the environment root instead of a drone body, disabling
+physics replication, dropping depth so only RGB is rendered, raising resolution above the
+DLSS threshold, and running with no other simulator process on the GPU.
+
+Worth trying next: a virtual display (`xvfb-run`), a data-centre driver rather than the
+cloud-gaming build, or running the camera task on a machine with a real display. The
+state-based tasks are unaffected -- they never render.
+
 ## Tuning the defend task
 
 Everything worth changing is in
