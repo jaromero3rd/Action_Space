@@ -125,32 +125,56 @@ worth trying: reward the defender for staying between the attacker and the site,
 each defender its own assigned target instead of the nearest one, or warm-start from
 behaviour cloning on the `chase` baseline.
 
-## Known issue: camera rendering fails on this server
+## Known issue: Replicator render variables fail on this server
 
-`AS-Defend-Camera-v0` currently fails at startup with:
+`AS-Defend-Camera-v0` fails at startup with:
 
 ```
 TypeError: Unable to write from unknown dtype, kind=f, size=0
 ```
 
-raised inside Omniverse Replicator while attaching render annotators. **This is not the
-task's fault**: Isaac Lab's own `Isaac-Cartpole-RGB-Camera-Direct-v0` fails identically on
-the same machine. The logs show Isaac Sim never producing the `LdrColorSD` render
-variable, i.e. rendering itself is not working on this headless instance, which runs the
-NVIDIA cloud-gaming (GRID) driver with no display attached.
+**What is actually broken:** Omniverse Replicator never receives the render variables the
+renderer is supposed to produce, so every consumer gets an empty buffer. Rendering itself
+is fine -- capturing the Kit viewport to a PNG works, and the WebRTC livestream shows a
+live picture.
 
-Things already tried that did **not** help: creating the sensor before the scene is
-cloned, attaching the camera to the environment root instead of a drone body, disabling
-physics replication, dropping depth so only RGB is rendered, raising resolution above the
-DLSS threshold, and running with no other simulator process on the GPU.
+Evidence, so nobody repeats the search:
 
-A virtual display (`xvfb-run -a -s "-screen 0 1280x720x24"`) was also tried: it delays
-the failure by several minutes but ends in the same error, so it is not a workaround.
+| Test | Result |
+|---|---|
+| Isaac Lab's own `Isaac-Cartpole-RGB-Camera-Direct-v0` | same failure -- not our code |
+| Minimal script: cube + camera + `rgb` annotator, no Isaac Lab | same failure |
+| `depth` and `semantic_segmentation` annotators | same failure -- not colour-specific |
+| Replicator `BasicWriter` to disk | same failure (`kind=i`) -- not the annotator API |
+| `get_data(use_legacy_structure=False)` | same failure -- not the data structure |
+| 256x256, 512x512, FXAA instead of DLSS | same failure -- not resolution or anti-aliasing |
+| Camera on env root / on a drone body / `replicate_physics=False` | same failure |
+| `xvfb-run` virtual display | delays it by minutes, same failure |
+| No other simulator process running | same failure |
+| **Kit viewport capture to PNG** | **works** |
 
-What is left to try: a data-centre NVIDIA driver instead of the cloud-gaming build, a
-different Isaac Sim version, or simply running camera tasks on a machine with a real
-display. The state-based tasks are unaffected -- they never render -- so day-one training
-works regardless.
+The Kit log records no errors: the RTX renderer starts, gets a device, and the only hint
+is a node-registration warning about `omni.replicator.core.FabricReader` -- the component
+that feeds annotators -- shortly before the empty buffer appears.
+
+The machine runs driver **590.52.01** from NVIDIA's cloud-gaming (GRID) branch, while
+Isaac Sim 5.1 and 6.0 both list a **580-series** production-branch driver as tested. That
+is the most likely culprit, though unproven. Fixing it means swapping to the production
+branch, or running camera work elsewhere.
+
+### Workaround for visuals: capture the viewport
+
+`scripts/record_clip.py` records the defend scenario by capturing viewport frames and
+stitching them with ffmpeg, bypassing Replicator entirely:
+
+```bash
+python scripts/record_clip.py --frames 150 --out /mnt/data/isaac/videos/defend_chase.mp4
+```
+
+The livestream (`isaaclab-stream.sh`, or `--livestream 1`) works for the same reason. What
+stays blocked is anything needing camera *sensors* as policy input -- `AS-Defend-Camera-v0`
+and training a detector -- since those read through Replicator. State-based training is
+completely unaffected.
 
 ## Tuning the defend task
 
