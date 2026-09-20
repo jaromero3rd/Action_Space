@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gymnasium as gym
+
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -17,8 +19,9 @@ class TelloHoverEnvCfg(DirectRLEnvCfg):
     # env
     decimation = 2
     episode_length_s = 10.0
-    # - spaces: action = [vx, vy, vz, yaw_rate] (the four SDK rc channels)
-    action_space = 4
+    # - spaces: action = [vx, vy, vz, yaw_rate] (the four SDK rc channels).
+    # Bounded so sampled actions can be clipped to the interface the real drone accepts.
+    action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(4,))
     # - obs = goal error (3) + lin vel (3) + ang vel (3) + projected gravity (3)
     observation_space = 12
     state_space = 0

@@ -223,8 +223,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            # skrl 2.1 signature: act(observations, states, *, timestep, timesteps)
-            outputs = runner.agent.act(obs, None, timestep=0, timesteps=0)
+            # skrl 2.1 signature: act(observations, states, *, timestep, timesteps).
+            # Multi-agent agents index states[agent_id], so pass a dict for those.
+            if hasattr(env, "possible_agents"):
+                states = {agent: None for agent in env.possible_agents}
+            else:
+                states = None
+            outputs = runner.agent.act(obs, states, timestep=0, timesteps=0)
             # - multi-agent (deterministic) actions
             if hasattr(env, "possible_agents"):
                 actions = {a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.possible_agents}

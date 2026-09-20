@@ -90,8 +90,10 @@ def main():
     while episodes < args_cli.episodes:
         if policy is not None:
             with torch.inference_mode():
-                # multi-agent skrl agents take and return dicts keyed by agent
-                outputs = policy.act(obs, None, timestep=0, timesteps=0)
+                # multi-agent skrl agents take and return dicts keyed by agent, and
+                # they index states[agent_id], so the states argument must be a dict too
+                states = {agent: None for agent in env.cfg.possible_agents}
+                outputs = policy.act(obs, states, timestep=0, timesteps=0)
                 actions = {
                     a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.cfg.possible_agents
                 }

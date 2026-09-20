@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gymnasium as gym
+
 from isaaclab.envs import DirectMARLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
@@ -31,7 +33,9 @@ class TelloDefendEnvCfg(DirectMARLEnvCfg):
 
     # multi-agent spaces -- every agent uses the four SDK rc channels
     possible_agents = [f"defender_{i}" for i in range(NUM_DEFENDERS)]
-    action_spaces = {agent: 4 for agent in possible_agents}
+    # Bounded on purpose: the four SDK rc channels live in [-1, 1], and an unbounded
+    # space leaves skrl nothing to clip sampled actions against.
+    action_spaces = {agent: gym.spaces.Box(low=-1.0, high=1.0, shape=(4,)) for agent in possible_agents}
     observation_spaces = {agent: _OBS_DIM for agent in possible_agents}
     state_space = -1  # concatenate agent observations
 
