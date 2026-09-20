@@ -144,9 +144,13 @@ cloned, attaching the camera to the environment root instead of a drone body, di
 physics replication, dropping depth so only RGB is rendered, raising resolution above the
 DLSS threshold, and running with no other simulator process on the GPU.
 
-Worth trying next: a virtual display (`xvfb-run`), a data-centre driver rather than the
-cloud-gaming build, or running the camera task on a machine with a real display. The
-state-based tasks are unaffected -- they never render.
+A virtual display (`xvfb-run -a -s "-screen 0 1280x720x24"`) was also tried: it delays
+the failure by several minutes but ends in the same error, so it is not a workaround.
+
+What is left to try: a data-centre NVIDIA driver instead of the cloud-gaming build, a
+different Isaac Sim version, or simply running camera tasks on a machine with a real
+display. The state-based tasks are unaffected -- they never render -- so day-one training
+works regardless.
 
 ## Tuning the defend task
 

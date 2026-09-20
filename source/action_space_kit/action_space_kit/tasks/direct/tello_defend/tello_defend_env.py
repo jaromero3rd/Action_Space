@@ -244,7 +244,13 @@ class TelloDefendEnv(DirectMARLEnv):
     def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         all_down = ~self._attacker_alive.any(dim=-1)
-        done = self._breached | all_down
+        if self.cfg.respawn_waves:
+            # a cleared field starts the next wave; only a breach ends the episode
+            if all_down.any():
+                self._respawn_attackers(all_down.nonzero(as_tuple=False).flatten())
+            done = self._breached
+        else:
+            done = self._breached | all_down
         finished = done | time_out
         self.outcome_valid = finished
         self.outcome_breached = torch.where(finished, self._breached, self.outcome_breached)
@@ -252,6 +258,28 @@ class TelloDefendEnv(DirectMARLEnv):
         terminated = {agent: done for agent in self.cfg.possible_agents}
         time_outs = {agent: time_out for agent in self.cfg.possible_agents}
         return terminated, time_outs
+
+    def _respawn_attackers(self, env_ids: torch.Tensor) -> None:
+        """Send a fresh wave into the listed environments, leaving defenders as they are."""
+        if len(env_ids) == 0:
+            return
+        num = len(env_ids)
+        origins = self.scene.env_origins[env_ids]
+        for i, drone in enumerate(self._attackers):
+            angle = sample_uniform(0.0, 6.2832, (num,), self.device)
+            state = drone.data.default_root_state[env_ids].clone()
+            state[:, 0] = origins[:, 0] + self.cfg.spawn_radius * torch.cos(angle)
+            state[:, 1] = origins[:, 1] + self.cfg.spawn_radius * torch.sin(angle)
+            state[:, 2] = origins[:, 2] + sample_uniform(1.5, 3.0, (num,), self.device)
+            state[:, 7:] = 0.0
+            drone.write_root_pose_to_sim(state[:, :7], env_ids)
+            drone.write_root_velocity_to_sim(state[:, 7:], env_ids)
+            self._attacker_ctl[i].reset(env_ids)
+        self._attacker_alive[env_ids] = True
+        self._attacker_speed[env_ids] = sample_uniform(
+            self.cfg.attacker_speed[0], self.cfg.attacker_speed[1], (num, self.cfg.num_attackers), self.device
+        )
+        self._prev_distance[env_ids] = self.cfg.spawn_radius
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
