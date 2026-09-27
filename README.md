@@ -29,6 +29,7 @@ If you write your own task, keep that action space and your policy stays flyable
 | `AS-Tello-Hover-v0` | single-agent | Hold a sampled position. Start here; trains in minutes. |
 | `AS-Tello-Waypoint-v0` | single-agent | Chase a moving goal -- the basis of pursuit. |
 | `AS-Defend-v0` | multi-agent | The hackathon scenario: defenders intercept attackers before they reach the protected site. |
+| `AS-Tello-Approach-v0` | multi-agent, SB3 | Four Tellos enter a base's airspace, each through its own gate on a keep-out sphere. Randomized Tello firmware model. See below. |
 
 List them yourself with `python scripts/list_envs.py`.
 
@@ -53,6 +54,41 @@ python scripts/skrl/train.py --task AS-Defend-v0 --algorithm IPPO --headless --n
 `--algorithm` accepts `IPPO` (each defender learns independently) or `MAPPO` (shared
 critic, usually better coordination). Metrics land in `logs/skrl/<task>/<run>/`; view them
 with `tensorboard --logdir logs`.
+
+## Setting up your own machine (Ubuntu + RTX 50-series)
+
+Tested reference: Isaac Sim 5.1.0, Isaac Lab v2.3.2, PyTorch 2.7.0 (CUDA 12.8), Python 3.11,
+Ubuntu 24.04 (22.04 also works). `setup.sh` pins all of these.
+
+1. **Driver.** RTX 50-series (Blackwell, e.g. the 5080) needs driver **570 or newer**, and
+   the open kernel modules. On Ubuntu: `sudo ubuntu-drivers install` (or
+   `sudo apt install nvidia-driver-570-open`), reboot, then check `nvidia-smi` shows the card.
+   Older PyTorch/CUDA 12.4 wheels do not support Blackwell; the cu128 wheels `setup.sh`
+   installs do.
+2. **Clone and install** (~30 GB, 20-40 min; put `ISAAC_ROOT` on a disk with room):
+
+   ```bash
+   git clone https://github.com/jaromero3rd/Action_Space.git ~/isaac/action_space_kit
+   cd ~/isaac/action_space_kit
+   ./setup.sh ~/isaac          # Isaac Sim + Isaac Lab + this kit + tello.usd into ~/isaac
+   ```
+
+   The first Isaac Sim launch compiles shaders for several minutes; that is not a hang.
+3. **Check it with the shipped policy** (no training needed; see `policies/README.md`):
+
+   ```bash
+   source ~/isaac/env_isaaclab/bin/activate
+   export OMNI_KIT_ACCEPT_EULA=YES TELLO_USD_PATH=~/isaac/assets/tello.usd
+   python scripts/sb3/play.py --task AS-Tello-Approach-v0 --headless --num_envs 64 --episodes 256 \
+     --checkpoint policies/approach_it5_room_fixed/model.zip \
+     env.spawn_azimuth_range=0.0 env.rew_scale_separation=-20.0 env.rew_violation=-100.0
+   ```
+
+   Expect `near_base_frac` around 0.9. Drop `--headless` to watch it in the Isaac Sim window.
+4. **Train.** `scripts/run_iter.sh <name> <iters> [overrides]` trains the approach task and
+   scores it (results in `outputs/policy_loop/results.txt`). A 5080 has 16 GB; 512 envs fits
+   comfortably, 1024 should too. Launch long runs detached:
+   `setsid nohup scripts/run_iter.sh it7 800 env.rew_time=-0.05 < /dev/null > /dev/null 2>&1 &`
 
 ## Measuring whether it actually defends
 
@@ -82,6 +118,114 @@ not yet worth flying.
 training curve sits near -60, the policy has not learned to engage yet; near +83 it is
 doing about as well as greedy pursuit, and beating that means coordinating -- splitting
 targets rather than both chasing the nearest attacker.
+
+## Approach task: `AS-Tello-Approach-v0` (SB3 PPO)
+
+Four Tellos start ~20 ft from a base at the env origin. Around the base is a 3 m (~10 ft)
+**keep-out sphere**. Each drone owns one **approach vector** out of the base, and its
+**waypoint** is where that vector crosses the sphere. A drone may cross into the sphere
+only after passing within 0.4 m of its own waypoint. It then flies to its own
+**designated landing spot** in the 1 m **touchdown zone** around the base. At the
+spot it is sent the SDK `land` command and descends at 0.5 m/s. The episode succeeds
+when all four have touched down.
+
+| Scenario | Value |
+|---|---|
+| Spawn | 4 drones in a line (0.6-0.9 m apart, 0.8-1.2 m up) inside a 10x10 ft square centred 20 ft from the base, in a random direction |
+| Approach vectors | resampled every episode: 30-60 deg above the floor, within +-45 deg of the spawn side, every pair >= 10 deg apart. The k-th drone from the left gets the k-th gate from the left, so corridors don't cross |
+| Landing spots | one per drone on the ground, 0.6 m from the base and 40 deg apart (0.41 m between neighbours), in the same left-to-right order as the gates. A drone is sent `land` once within 0.25 m of the point 0.5 m above its spot |
+| Aborts (-30, episode ends) | entering the sphere without one's gate, two drones within 0.15 m, below 0.2 m (except while landing) or above 4 m, more than 10 m out, tilt > 60 deg |
+| Episode | 25 s at 20 Hz policy rate; physics and rate PID at 500 Hz |
+
+**Action.** `[vx, vy, vz, yaw_rate]` in [-1, 1], in the drone's heading frame: exactly the
+SDK `rc` channels. Attitude **cannot** be commanded on a Tello; the firmware closes that
+loop, so the sim does too (next paragraph).
+
+**Tello model with PID randomization.** `control/tello_dynamics.py` simulates the firmware
+as a cascade: velocity PI -> attitude -> body-rate PID -> mixer -> motor lag -> rotor drag.
+The rate PID, mixer, motor model and drag are ported from
+[ese651_project](https://github.com/Jirl-upenn/ese651_project). Every drone draws its own
+parameters on each reset, with ranges mirroring that project's `_twr_min` ... `_kd_omega_y_max`
+block:
+
+| Parameter | Range (x nominal) |
+|---|---|
+| thrust-to-weight | 0.95-1.05 |
+| rotor drag `k_aero_xy`, `k_aero_z` | 0.5-2.0 |
+| rate PID kp, ki (roll/pitch and yaw) | 0.85-1.15 |
+| rate PID kd | 0.7-1.3 |
+| velocity-loop kp/ki, attitude kp | 0.85-1.15 |
+| motor time constant | 0.8-1.2 |
+| true mass vs the firmware's assumed mass | 0.95-1.05 |
+| command latency | 0, 1 or 2 policy steps |
+
+Set `env.dynamics.domain_randomization=False` for nominal dynamics. The nominal airframe
+numbers (`arm_length`, `thrust_to_weight`, `tau_m`) are estimates. Refine them against
+real flight logs.
+
+**Reward (per drone, per 20 Hz step).**
+
+| Term | Value |
+|---|---|
+| step ends closer to the current target than the last one | +1 |
+| step ends no closer (further away, or equal) | -0.5 |
+| reaching its own waypoint | +100 |
+| reaching its landing spot in the touchdown zone (it then lands; the policy stops acting) | +100 |
+| abort (see above), to the offending drone | -30 |
+| safety shaping, per second: near the sphere away from its gate / within 0.5 m of another drone / effort / action change | -4 / -4 / -0.01 / -0.05 |
+
+The current target is the drone's own waypoint, and after the gate it is the point above its landing spot. A drone
+earns nothing while landing or once down. Every value is a `rew_*` field in
+`tello_approach_env_cfg.py`; set the safety terms to 0 for the bare +1 / -0.5 / +100 / +100
+structure.
+
+**Observation (38 per drone, ego-centric).** Own position (3) and quaternion (4); the
+other three drones' positions (9) and quaternions (12); base position (3); own velocity
+(3); own waypoint (3); gate-passed flag (1); own landing spot (3), 41 in all. Positions are relative to the base. SB3's
+`VecNormalize` normalizes them, and `VecFrameStack` gives the policy that drone's **last 8
+observations** (328 inputs). The policy and value networks are MLPs with **2 hidden layers
+of 128** (ELU).
+
+**One shared policy.** `rl/sb3_shared.py` turns each drone of each env into its own SB3
+row. All four drones therefore train one policy, and each real Tello can run that policy on
+its own. (Isaac Lab's stock `multi_agent_to_single_agent` would instead train one
+centralized 16-D controller.)
+
+```bash
+# verify geometry, flight model and baselines before trusting any training curve
+python scripts/check_approach_env.py --headless --test all
+
+# train: ~12 s per iteration on the A10G at 512 envs (2048 drones)
+python scripts/sb3/train.py --task AS-Tello-Approach-v0 --headless --num_envs 512 --max_iterations 500
+
+# render a video (viewport capture; camera sensors are broken on this server)
+python scripts/record_approach.py --pilot policy --episodes 3 --out /mnt/data/isaac/videos/approach_policy.mp4
+
+# score or watch a checkpoint (defaults to the latest run's model.zip)
+python scripts/sb3/play.py --task AS-Tello-Approach-v0 --headless --num_envs 64 --episodes 256
+/mnt/data/isaac/isaaclab-stream.sh ../action_space_kit/scripts/sb3/play.py --task AS-Tello-Approach-v0 --num_envs 4
+```
+
+TensorBoard (`logs/sb3/AS-Tello-Approach-v0/<run>`) reports `Episode/success_rate`,
+`drones_arrived`, `drones_landed`, `gates_passed`, `illegal_entry_rate`, `collision_rate` and `crash_rate`.
+
+Baselines from `check_approach_env.py` (256 episodes, randomization on):
+
+| Pilot | Success | Illegal entry | Collision | Team return |
+|---|---|---|---|---|
+| zero actions | 0% | 0% | 0% | -616.7 |
+| scripted (out-point -> gate -> landing spot) | 99% | 0% | 1% | +1387.7 |
+
+Landing spots exist because two corridors can be as little as 10 deg apart. That is only
+~17 cm where they meet the touchdown zone, so landing straight down the corridor caused
+collisions in 54% of episodes.
+
+**On real drones.** A Tello reports neither its own position nor the others'. The
+observation needs motion capture (or mission pads) and a ground station that runs the
+policy for every drone at ~20 Hz, keeping each drone's last 8 observations for the frame stack. It sends `land` once a drone is over its landing spot. Quaternions are computed from the roll/pitch/yaw each
+Tello streams on UDP 8890. `TelloCascadeController.to_rc` gives the SDK signs: `rc a` is
+positive to the **right** and `rc d` is positive **clockwise**, while the sim's `vy` and
+`yaw_rate` are left/counter-clockwise positive, so both are negated.
 
 ## Known issue: PPO converges to passivity on the default difficulty
 

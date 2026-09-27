@@ -80,3 +80,7 @@ outputs/
 
 # editor/patch leftovers
 *.bak
+*.bak*
+
+# shipped policies (small SB3 checkpoints, see policies/README.md)
+!policies/**
