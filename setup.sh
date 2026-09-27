@@ -9,7 +9,13 @@
 #     reports the error but carries on -- leaving the core isaaclab package missing.
 #   * an automatic kernel upgrade can leave the NVIDIA driver unbuilt, so the GPU
 #     disappears after a reboot. Check nvidia-smi before blaming anything else.
+#   * an active conda env (even `base`) makes isaaclab.sh use conda's python instead of
+#     the venv's; its vscode step and convert.sh then fail. The script unsets conda vars.
+# Safe to re-run: finished steps are skipped or are quick no-op reinstalls.
 set -euo pipefail
+
+# resolve before any cd: $0 may be relative (./setup.sh)
+KIT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 ISAAC_ROOT=${1:-/mnt/data/isaac}
 ISAACLAB_VERSION=${ISAACLAB_VERSION:-v2.3.2}
@@ -22,9 +28,18 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader ||
 }
 
 echo "== system packages"
-sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  cmake build-essential git curl libglu1-mesa libvulkan1 vulkan-tools
+APT_PKGS=(cmake build-essential git git-lfs curl ffmpeg libglu1-mesa libvulkan1 vulkan-tools)
+MISSING=()
+for p in "${APT_PKGS[@]}"; do
+  dpkg -s "$p" >/dev/null 2>&1 || MISSING+=("$p")
+done
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "installing: ${MISSING[*]}"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING[@]}"
+else
+  echo "all present, skipping apt (no sudo needed)"
+fi
 
 echo "== workspace: $ISAAC_ROOT"
 mkdir -p "$ISAAC_ROOT"
@@ -38,6 +53,9 @@ command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "== python 3.11 environment"
+# isaaclab.sh picks $CONDA_PREFIX's python over $VIRTUAL_ENV's, so an active conda env
+# (even `base`) silently hijacks it; the vscode step and convert.sh then fail. Drop it.
+unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_PYTHON_EXE CONDA_EXE
 [ -d env_isaaclab ] || uv venv --python 3.11 --seed env_isaaclab
 source env_isaaclab/bin/activate
 
@@ -61,7 +79,6 @@ uv pip install -q --editable source/isaaclab   # belt and braces: the step above
 cd ..
 
 echo "== this kit"
-KIT_DIR=$(cd "$(dirname "$0")" && pwd)
 uv pip install -q -e "$KIT_DIR/source/action_space_kit"
 uv pip install -q djitellopy   # real-drone bridge
 
