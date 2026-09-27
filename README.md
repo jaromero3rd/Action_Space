@@ -7,7 +7,8 @@ one, fly them on real Tello EDU drones on day two.
 **New here?** Go to [Installation](#installation-new-machine). About 30 minutes after cloning
 you'll have four simulated Tellos flying to a base and landing, using the trained
 policy shipped in `policies/`. AI agents doing the install should follow
-[`CLAUDE.md`](CLAUDE.md) instead.
+[`CLAUDE.md`](CLAUDE.md) instead. To tune rewards and train your own policy, see
+[`policy_maker.md`](policy_maker.md).
 
 ## The one rule that makes day two work
 

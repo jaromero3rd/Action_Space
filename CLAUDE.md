@@ -159,6 +159,8 @@ Replicator camera *sensors* are a separate known issue (see README), and this de
 
 ## Training (optional)
 
+For reward locations, tuning knobs, batch sizing and measured throughput, see `policy_maker.md`.
+
 ```bash
 python -u scripts/sb3/train.py --task AS-Tello-Approach-v0 --headless --num_envs 512 --max_iterations 800 \
   agent.learning_rate=1e-3 env.spawn_azimuth_range=0.0 env.rew_scale_separation=-20.0 env.rew_violation=-100.0
