@@ -21,6 +21,9 @@ import av
 import cv2
 import numpy as np
 
+from tello_dongle_setup import load_fleet
+from tello_tags import TAG_SIZE_M as WORLD_TAG_SIZE_M
+from tello_tags import camera_in_tag, load_map, origin_in_camera
 from tello_policy import (
     LANES,
     MIN_HEIGHT_M,
@@ -36,10 +39,10 @@ from tello_policy import (
 )
 
 TELLO = "192.168.10.1"
-DRONES = (
-    ("TELLO-3", "wlx58d8125eda77", 17003),
-    ("TELLO-4", "wlx6c4cbce344fc", 17004),
-)
+# Which drones this rig flies. Each one's USB dongle (interface + video port)
+# comes from dongles.json, written by tello_dongle_setup.py -- nothing here is
+# tied to a specific dongle's MAC.
+FLEET_NAMES = ("TELLO-3", "TELLO-4")
 # Black square of tag 14. Focal length calibrated at 960 px wide.
 TAG_ID = 14
 TAG_SIZE_M = 0.995
@@ -495,27 +498,69 @@ def watch_pose(name, frames, poses, stats, stop):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         height, width = gray.shape
         focal = CAL_F_AT_960 * (width / 960.0)
+        # One detect at 1 m. Translation scales with the real black-square side.
         tags = det.detect(
             gray,
             estimate_tag_pose=True,
             camera_params=(focal, focal, width / 2.0, height / 2.0),
-            tag_size=TAG_SIZE_M,
+            tag_size=1.0,
         )
-        hit = None
+        tag_map = load_map()
+        world_best = None
+        legacy = None
         for tag in tags:
-            if int(tag.tag_id) != TAG_ID or tag.pose_t is None:
+            if tag.pose_t is None:
                 continue
-            cam = (-tag.pose_R.T @ tag.pose_t).ravel()
-            xyz = tag.pose_t.ravel()
+            tag_id = int(tag.tag_id)
+            rotation = np.asarray(tag.pose_R, dtype=float).reshape(3, 3)
+            raw_t = np.asarray(tag.pose_t, dtype=float).reshape(3)
+            margin = float(getattr(tag, "decision_margin", 0.0))
+            if tag_id in WORLD_TAG_SIZE_M:
+                origin = origin_in_camera(tag_id, rotation, raw_t * WORLD_TAG_SIZE_M[tag_id], tag_map)
+                if origin is None:
+                    if tag_id not in getattr(watch_pose, "unmapped", set()):
+                        print(f"{name} tag {tag_id} seen, no map", flush=True)
+                        watch_pose.unmapped = getattr(watch_pose, "unmapped", set()) | {tag_id}
+                    continue
+                if world_best is None or margin > world_best[0]:
+                    world_best = (margin, tag_id, origin, tag)
+            elif tag_id == TAG_ID:
+                if legacy is None or margin > legacy[0]:
+                    legacy = (margin, raw_t * TAG_SIZE_M, tag)
+        hit = None
+        chosen = world_best if world_best is not None else legacy
+        if chosen is not None and world_best is not None:
+            _margin, tag_id, (origin_r, origin_t), tag = world_best
+            cam = camera_in_tag(origin_r, origin_t)
             hit = {
-                "id": TAG_ID,
+                "id": tag_id,
+                "world": True,
                 "range_m": round(float(np.linalg.norm(cam)), 2),
                 "perp_m": round(float(-cam[2]), 2),
                 "x": round(float(cam[0]), 2),
                 "y": round(float(cam[1]), 2),
                 "z": round(float(cam[2]), 2),
-                "xyz": [round(float(v), 3) for v in xyz],
-                "R": [[float(tag.pose_R[i, j]) for j in range(3)] for i in range(3)],
+                "xyz": [round(float(v), 3) for v in origin_t],
+                "R": [[float(origin_r[i, j]) for j in range(3)] for i in range(3)],
+                "center": [float(tag.center[0]), float(tag.center[1])],
+                "size": [int(width), int(height)],
+                "t": time.time(),
+            }
+        elif chosen is not None:
+            _margin, _scaled, tag = legacy
+            translation = np.asarray(tag.pose_t, dtype=float).reshape(3) * TAG_SIZE_M
+            rotation = np.asarray(tag.pose_R, dtype=float).reshape(3, 3)
+            cam = camera_in_tag(rotation, translation)
+            hit = {
+                "id": TAG_ID,
+                "world": False,
+                "range_m": round(float(np.linalg.norm(cam)), 2),
+                "perp_m": round(float(-cam[2]), 2),
+                "x": round(float(cam[0]), 2),
+                "y": round(float(cam[1]), 2),
+                "z": round(float(cam[2]), 2),
+                "xyz": [round(float(v), 3) for v in translation],
+                "R": [[float(rotation[i, j]) for j in range(3)] for i in range(3)],
                 "center": [float(tag.center[0]), float(tag.center[1])],
                 "size": [int(width), int(height)],
                 "t": time.time(),
@@ -525,7 +570,8 @@ def watch_pose(name, frames, poses, stats, stop):
             poses[name] = hit
             stats[name]["tag_hit"] += 1
             if abs(hit["range_m"] - prev.get("range_m", -1)) >= 0.05:
-                print(f"{name} tag {TAG_ID} {hit['range_m']:.2f} m", flush=True)
+                where = " world" if hit.get("world") else ""
+                print(f"{name} tag {hit['id']}{where} {hit['range_m']:.2f} m", flush=True)
         else:
             stats[name]["tag_miss"] += 1
             prev = poses.get(name)
@@ -589,7 +635,7 @@ async function tick() {{
       }}
       m.textContent = p.range_m.toFixed(2) + ' m';
       xyz.textContent = 'x ' + p.x.toFixed(2) + ' m\\ny ' + p.y.toFixed(2) + ' m\\nz ' + p.z.toFixed(2) + ' m';
-      s.textContent = 'tag ' + p.id + '  ·  ' + p.perp_m.toFixed(2) + ' m off the face  ·  ' + (p.mode || '');
+      s.textContent = 'tag ' + p.id + (p.world ? '  ·  tag 10 frame' : '') + '  ·  ' + p.perp_m.toFixed(2) + ' m off the face  ·  ' + (p.mode || '');
     }}
     const banner = document.getElementById('banner');
     const rel = document.getElementById('rel');
@@ -680,22 +726,22 @@ def serve(frames, poses, modes, estimates, stats, sync, stop, names, play):
                             "x": hit["x"],
                             "y": hit["y"],
                             "z": hit["z"],
+                            "world": bool(hit.get("world")),
                             "mode": "play" if play else modes.get(name, ""),
                         }
                 pair = [out.get(name) for name in names]
-                if names and all(pair):
+                if len(pair) > 1 and all(pair):
                     out["together"] = True
-                    a, b = pair[0], pair[1] if len(pair) > 1 else (pair[0], None)
-                    if b is not None:
-                        dx = b["x"] - a["x"]
-                        dy = b["y"] - a["y"]
-                        dz = b["z"] - a["z"]
-                        out["between"] = {
-                            "dx": round(dx, 2),
-                            "dy": round(dy, 2),
-                            "dz": round(dz, 2),
-                            "apart": round(float(np.hypot(np.hypot(dx, dy), dz)), 2),
-                        }
+                    a, b = pair[0], pair[1]
+                    dx = b["x"] - a["x"]
+                    dy = b["y"] - a["y"]
+                    dz = b["z"] - a["z"]
+                    out["between"] = {
+                        "dx": round(dx, 2),
+                        "dy": round(dy, 2),
+                        "dz": round(dz, 2),
+                        "apart": round(float(np.hypot(np.hypot(dx, dy), dz)), 2),
+                    }
                     key = tuple(round(poses[name]["t"], 2) for name in names)
                     if key != sync["last"]:
                         sync["last"] = key
@@ -753,9 +799,8 @@ def serve(frames, poses, modes, estimates, stats, sync, stop, names, play):
 def main():
     play = "--play" in sys.argv[1:]
     want = [arg for arg in sys.argv[1:] if arg != "--play"]
-    drones = tuple(d for d in DRONES if not want or d[0] in want)
-    if want and len(drones) != len(want):
-        raise SystemExit("unknown drone: " + " ".join(want))
+    wanted = want or list(FLEET_NAMES)
+    drones = tuple((d["drone"], d["iface"], d["video_port"]) for d in load_fleet(wanted))
     stop = threading.Event()
     frames = {}
     threads = []

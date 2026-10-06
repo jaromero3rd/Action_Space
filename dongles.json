@@ -1,0 +1,87 @@
+{
+  "description": "USB WiFi dongle -> Tello map. See tello_dongle_setup.py.",
+  "dongles": [
+    {
+      "number": 1,
+      "iface": "wlx6c4cbce345b3",
+      "mac": "6c:4c:bc:e3:45:b3",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17001,
+      "note": ""
+    },
+    {
+      "number": 2,
+      "iface": "wlx58d8125edaa6",
+      "mac": "58:d8:12:5e:da:a6",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17002,
+      "note": ""
+    },
+    {
+      "number": 3,
+      "iface": "wlx6c4cbce33375",
+      "mac": "6c:4c:bc:e3:33:75",
+      "drone": "TELLO-3",
+      "ssid": "TELLO-3",
+      "video_port": 17003,
+      "note": ""
+    },
+    {
+      "number": 4,
+      "iface": "wlx58d8125ecf0d",
+      "mac": "58:d8:12:5e:cf:0d",
+      "drone": "TELLO-4",
+      "ssid": "TELLO-4",
+      "video_port": 17004,
+      "note": ""
+    },
+    {
+      "number": 5,
+      "iface": "wlx58d8125ebaf2",
+      "mac": "58:d8:12:5e:ba:f2",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17005,
+      "note": ""
+    },
+    {
+      "number": 6,
+      "iface": "wlx6c4cbce335cf",
+      "mac": "6c:4c:bc:e3:35:cf",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17006,
+      "note": ""
+    },
+    {
+      "number": 7,
+      "iface": "wlx6c4cbce344fc",
+      "mac": "6c:4c:bc:e3:44:fc",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17007,
+      "note": ""
+    },
+    {
+      "number": 8,
+      "iface": "wlx58d8125ec53b",
+      "mac": "58:d8:12:5e:c5:3b",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17008,
+      "note": ""
+    },
+    {
+      "number": 9,
+      "iface": "wlx58d8125eda77",
+      "mac": "58:d8:12:5e:da:77",
+      "drone": "",
+      "ssid": "",
+      "video_port": 17009,
+      "note": ""
+    }
+  ],
+  "updated": "2026-10-06T19:27:53-0400"
+}

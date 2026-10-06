@@ -8,16 +8,21 @@ import subprocess
 import time
 from pathlib import Path
 
+from tello_dongle_setup import load_fleet
+
 ROOT = Path("/home/jaimeromero/action-space")
 PYTHON = ROOT / ".venv" / "bin" / "python"
 VIDEO = ROOT / "tello_dual_video.py"
 PERIOD_S = 8
 
-# SSID, USB interface, NetworkManager profile.
-DRONES = (
-    ("TELLO-3", "wlx58d8125eda77", "TELLO-3"),
-    ("TELLO-4", "wlx6c4cbce344fc", "TELLO-4"),
-)
+# Which drones to join. Each one's dongle interface comes from dongles.json
+# (tello_dongle_setup.py); the NetworkManager profile is named after the drone.
+FLEET_NAMES = ("TELLO-3", "TELLO-4")
+
+
+def fleet_specs():
+    """(ssid, iface, nm_profile) per drone, read from the dongle registry."""
+    return tuple((d["drone"], d["iface"], d["drone"]) for d in load_fleet(FLEET_NAMES))
 
 
 def _nmcli(args, timeout=25):
@@ -94,12 +99,13 @@ def ensure_video():
 
 def main():
     print("link watch every", PERIOD_S, "s", flush=True)
+    specs = fleet_specs()
     ensure_video()
     cycle = 0
     while True:
         started = time.time()
         connected = []
-        for spec in DRONES:
+        for spec in specs:
             connected.append(connect_drone(device_links(), spec))
         cycle += 1
         if all(connected):
