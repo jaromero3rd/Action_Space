@@ -5,8 +5,8 @@
       "number": 1,
       "iface": "wlx6c4cbce345b3",
       "mac": "6c:4c:bc:e3:45:b3",
-      "drone": "",
-      "ssid": "",
+      "drone": "TELLO-1",
+      "ssid": "TELLO-1",
       "video_port": 17001,
       "note": ""
     },
