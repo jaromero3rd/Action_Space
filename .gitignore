@@ -84,3 +84,4 @@ outputs/
 
 # shipped policies (small SB3 checkpoints, see policies/README.md)
 !policies/**
+.vscode/
