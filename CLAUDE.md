@@ -1,5 +1,12 @@
 # CLAUDE.md: install and run guide for AI agents
 
+> **Repo layout (moved 2026-10-07):** the Isaac Lab **simulation** now lives in
+> `simulation_infra/` — prefix the paths in the steps below (`setup.sh`, `source/`,
+> `scripts/`, `policies/`, `assets/`, `policy_maker.md`) with `simulation_infra/`
+> (e.g. `simulation_infra/setup.sh ~/isaac`). The **real-world drone** code is in
+> `drone_deployment_infra/` (calibration, mapping, connect, policies, recordings) —
+> see `drone_deployment_infra/README.md`. This guide covers the simulation side.
+
 Isaac Lab kit for the Action Space hackathon. The main demo is **`AS-Tello-Approach-v0`**:
 four DJI Tello drones fly to a base, each passes through its own gate on a 3 m keep-out
 sphere, then lands on its own pad. The human version of this guide is the

@@ -1,0 +1,21 @@
+# Which drones we fly and their roles. The dongle -> drone mapping (which USB stick
+# flies which drone, and the video port) lives alongside this in dongles.json.
+#
+# Drone names must match the `drone` field in dongles.json and the camera configs
+# config/camera/<drone>.yaml.
+
+fly_count: 4            # drones in the full swarm we intend to fly
+
+roles:
+  attack:               # attacking drones (fly the track)
+    - TELLO-3
+    - TELLO-4
+  defense:              # defense drones
+    - TELLO-1
+    - TELLO-2
+
+# Quick-connect drones: brought up first for calibration, mapping, single-drone tests
+# and small swarm tests. tello_link waits for these (whichever of their sticks are
+# plugged in) and connects them before anything else.
+quick_connect:
+  - TELLO-3

@@ -85,3 +85,7 @@ outputs/
 # shipped policies (small SB3 checkpoints, see policies/README.md)
 !policies/**
 .vscode/
+
+# local Python venv (do not commit)
+.venv/
+**/.venv/

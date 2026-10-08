@@ -1,0 +1,41 @@
+# AprilTag landmarks from the real-world map (drone_deployment_infra/config/map.yaml).
+# Positions are in the tag-10 origin frame, metres. For training in sim.
+origin_tag: 10
+frame: 'origin tag (tag 10): x right, y up, z out of the tag face; metres'
+tags:
+  5:
+    size_m: 0.1321
+    pos:
+    - 1.6702
+    - 0.3591
+    - 2.6685
+  6:
+    size_m: 0.1321
+    pos:
+    - -0.6435
+    - -0.9006
+    - 2.0578
+  7:
+    size_m: 0.1321
+    pos:
+    - 0.0473
+    - -0.8695
+    - 2.068
+  8:
+    size_m: 0.1321
+    pos:
+    - -0.8344
+    - 0.3138
+    - -0.0779
+  9:
+    size_m: 0.1321
+    pos:
+    - 0.9788
+    - 0.3053
+    - -0.0857
+  10:
+    size_m: 0.5715
+    pos:
+    - 0.0
+    - 0.0
+    - 0.0
