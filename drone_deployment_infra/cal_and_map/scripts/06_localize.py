@@ -92,7 +92,7 @@ def localize_loop(video: VideoReceiver, detector: TagDetector, tag_map: TagMap) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--drone", required=True, help="drone name in config/drones.yaml")
+    parser.add_argument("--drone", required=True, help="drone name in config/fleet.yaml")
     parser.add_argument("--map", type=Path, default=CONFIG_DIR / "map.yaml")
     parser.add_argument("--tags", type=Path, default=CONFIG_DIR / "tags.yaml")
     parser.add_argument("--camera", type=Path, help="default: config/camera/<drone>.yaml")

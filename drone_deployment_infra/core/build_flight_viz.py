@@ -14,8 +14,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TRACK_DIR = ROOT / "outputs" / "tracks"
-OUT = ROOT / "outputs" / "flight_viz.html"
+# Everything a flight produces lives in recordings/: the .avi, the live track
+# (.live.jsonl), the offline reconstruction (.track.jsonl) and the training data
+# (.train.jsonl). This reads the track files from there and writes the page there too.
+TRACK_DIR = ROOT / "recordings"
+OUT = TRACK_DIR / "flight_viz.html"
 
 
 def wifi_spans(rows):
@@ -44,18 +47,23 @@ def session_of(name):
 
 def label_of(path):
     """Human label like '013 TELLO-1' (plus ' live' for a live track)."""
-    stem = path.stem
+    stem = path.stem                      # '<sess>_<drone>.live' or '<sess>_<drone>_<stamp>.track'
     live = stem.endswith(".live")
-    base = stem[:-5] if live else stem
-    parts = base.split("_")
-    drone = parts[1] if len(parts) > 1 else base
-    return f"{session_of(base)} {drone}" + (" live" if live else "")
+    if live:
+        stem = stem[:-len(".live")]
+    elif stem.endswith(".track"):
+        stem = stem[:-len(".track")]
+    parts = stem.split("_")
+    drone = parts[1] if len(parts) > 1 else stem
+    return f"{session_of(stem)} {drone}" + (" live" if live else "")
 
 
 def all_tracks():
-    """One track per session across outputs/tracks, preferring the live one."""
+    """One track per session in recordings/, preferring the live one over the offline
+    reconstruction. Only *.live.jsonl / *.track.jsonl count -- never the .train.jsonl
+    action logs, which share the folder but have a different schema."""
     by_session = {}
-    for path in TRACK_DIR.glob("*.jsonl"):
+    for path in list(TRACK_DIR.glob("*.live.jsonl")) + list(TRACK_DIR.glob("*.track.jsonl")):
         session = session_of(path.stem)
         live = path.stem.endswith(".live")
         if session not in by_session or (live and not by_session[session][1]):
@@ -235,7 +243,7 @@ def main():
     args = [Path(a) for a in sys.argv[1:] if not a.startswith("-")]
     paths = args if args else all_tracks()
     if not paths:
-        raise SystemExit("no tracks in outputs/tracks/ -- run extract_track.py first")
+        raise SystemExit("no tracks in recordings/ -- run extract_track.py first")
     flights = load_tracks(paths)
     data = {f["name"]: {"rows": f["rows"], "wifi": f["wifi"]} for f in flights}
     OUT.write_text(PAGE.replace("__DATA__", json.dumps(data)))

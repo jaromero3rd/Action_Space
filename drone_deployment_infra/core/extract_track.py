@@ -12,7 +12,7 @@ feed the flight visualization.
 
 WiFi state is not in the recording (frames only exist while connected, and the
 .avi drops no timestamps), so it is not reconstructed here -- future flights log
-it live. Output goes to outputs/tracks/<name>.jsonl.
+it live. Output goes next to the recordings: recordings/<name>.track.jsonl.
 """
 
 import json
@@ -31,8 +31,11 @@ from tello_tags import camera_in_tag, load_map, origin_in_camera
 
 # Same focal calibration as tello_dual_video (960 px wide stream).
 CAL_F_AT_960 = 871.0
+# Everything a flight produces lives in one place: recordings/. The video, the live
+# track, the training data and this offline reconstruction all land here, so there is
+# no hunting between recordings/ and outputs/.
 RECORD_DIR = ROOT / "recordings"
-OUT_DIR = ROOT / "outputs" / "tracks"
+OUT_DIR = RECORD_DIR
 FPS = 30.0
 
 
@@ -43,7 +46,7 @@ def session_of(name):
 
 def already_tracked(avi):
     """True if this recording has a track already (live track wins over offline)."""
-    if (OUT_DIR / (avi.stem + ".jsonl")).is_file():
+    if (OUT_DIR / (avi.stem + ".track.jsonl")).is_file():
         return True
     session = session_of(avi.stem)
     return any(session_of(p.name) == session for p in OUT_DIR.glob("*.live.jsonl"))
@@ -120,7 +123,7 @@ def main():
         return
     for path in paths:
         samples, frames, hits = extract(path)
-        out = OUT_DIR / (path.stem + ".jsonl")
+        out = OUT_DIR / (path.stem + ".track.jsonl")
         with open(out, "w", encoding="utf-8") as handle:
             for row in samples:
                 handle.write(json.dumps(row) + "\n")

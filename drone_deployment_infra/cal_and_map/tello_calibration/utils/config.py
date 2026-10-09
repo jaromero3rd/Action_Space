@@ -11,14 +11,14 @@ import yaml
 # Central config lives at drone_deployment_infra/config (one level above cal_and_map).
 CONFIG_DIR = Path(__file__).resolve().parents[3] / "config"
 
-# drones.yaml value meaning "this firmware has no sn? command; rely on BSSID".
+# fleet.yaml `drones:` value meaning "this firmware has no sn? command; rely on BSSID".
 SERIAL_UNSUPPORTED = "unsupported"
 _BSSID_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 _REQUIRED_KEYS = ("iface", "ssid", "bssid", "serial")
 
 
 class DroneConfigError(ValueError):
-    """drones.yaml entry missing or malformed."""
+    """fleet.yaml `drones:` entry missing or malformed."""
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class DroneConfig:
     notes: str
 
 
-def load_drone_config(name: str, path: Path = CONFIG_DIR / "drones.yaml") -> DroneConfig:
+def load_drone_config(name: str, path: Path = CONFIG_DIR / "fleet.yaml") -> DroneConfig:
     with path.open() as f:
         drones = (yaml.safe_load(f) or {}).get("drones") or {}
     if name not in drones:

@@ -22,7 +22,7 @@ PY=~/action-space/.venv/bin/python
 ```
 
 Config lives in `tello_calibration/config/`:
-- `drones.yaml` — one entry per drone (iface, ssid, bssid). `tello_3` → stick `wlx6c4cbce33375`.
+- `fleet.yaml` `drones:` — one entry per drone (iface, ssid, bssid). `tello_3` → stick `wlx6c4cbce33375`.
 - `camera/<drone>.yaml` — camera matrix + distortion (focal length = `camera_matrix[0][0]`).
 - `tags.yaml` — `origin_tag: 10`; `sizes_mm` lists every tag to map (1-9 = 132.08 mm, 10 = 571.5 mm).
 - `map.yaml` — the room map (written by step 4).

@@ -14,7 +14,7 @@ localize against the map, and review flights. Run everything with the repo venv
 | `positional.py` | "Where is the drone?" — loads `config/map.yaml` + a drone's camera calib and returns the drone's position in the tag-10 frame from any mapped tag in a frame. | `Positioner("tello_3").locate(frame)` |
 | `fleet.py` | Loads `config/fleet.yaml` (roles, quick-connect, count). | `.../python fleet.py` prints it |
 | `extract_track.py` | Reconstruct a per-flight track from a recording (tag-10 pose over time). | `.../python extract_track.py` |
-| `build_flight_viz.py` | Bake all tracks into `outputs/flight_viz.html`. | `.../python build_flight_viz.py` then open the html |
+| `build_flight_viz.py` | Bake all tracks into `recordings/flight_viz.html`. | `.../python build_flight_viz.py` then open the html |
 
 Outputs land in `../recordings/` (video) and `../outputs/` (tracks, training logs, viz).
 Policies to drive the track live in `../drone_deployment_tests/`; the engine imports the

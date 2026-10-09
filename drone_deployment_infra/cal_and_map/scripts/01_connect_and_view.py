@@ -1,6 +1,6 @@
 """Connection check for one Tello, then show its live camera feed.
 
-The drone's identity (Wi-Fi SSID/BSSID, then sn?) must match config/drones.yaml
+The drone's identity (Wi-Fi SSID/BSSID, then sn?) must match config/fleet.yaml
 before streamon is sent. Only allowlisted commands are used.
 Press 'q' in the video window or Ctrl+C to stop.
 """
@@ -79,7 +79,7 @@ def view_loop(link: TelloLink, video: VideoReceiver) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--drone", required=True,
-                        help="drone name in config/drones.yaml, e.g. tello_4")
+                        help="drone name in config/fleet.yaml, e.g. tello_4")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     args = parser.parse_args()
 

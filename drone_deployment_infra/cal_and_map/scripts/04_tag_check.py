@@ -81,7 +81,7 @@ def view_loop(video: VideoReceiver, detector: TagDetector) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--drone", required=True, help="drone name in config/drones.yaml")
+    parser.add_argument("--drone", required=True, help="drone name in config/fleet.yaml")
     parser.add_argument("--tags", type=Path, default=CONFIG_DIR / "tags.yaml")
     parser.add_argument("--camera", type=Path, help="default: config/camera/<drone>.yaml")
     args = parser.parse_args()

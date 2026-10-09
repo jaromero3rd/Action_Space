@@ -258,7 +258,8 @@ class TelloLink:
             except socket.timeout:
                 return None
             if addr[0] == self._drone_addr[0]:
-                return data.decode("utf-8", errors="replace").strip()
+                # Fold case: some firmware replies "OK", some "ok".
+                return data.decode("utf-8", errors="replace").strip().lower()
         return None
 
     def _drain(self) -> None:

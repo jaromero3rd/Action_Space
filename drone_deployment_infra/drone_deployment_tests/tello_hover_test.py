@@ -57,7 +57,8 @@ def ask(sock, cmd, timeout):
     try:
         sock.sendto(cmd.encode(), TELLO)
         data, _ = sock.recvfrom(256)
-        return data.decode(errors="replace").strip()
+        # Some firmware replies "OK", some "ok"; fold case (callers test "ok").
+        return data.decode(errors="replace").strip().lower()
     except (socket.timeout, OSError):
         return None
 

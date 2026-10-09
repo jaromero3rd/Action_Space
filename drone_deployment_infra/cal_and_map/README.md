@@ -5,9 +5,10 @@ localize the drone against that map. Standard DJI/Ryze Tello (SDK 1.3, not EDU).
 
 Run with the repo venv (`../../.venv/bin/python`); the `tello_*` scripts have a venv
 shebang, so `./tello_map.py` also works. Config is read from `../config/`
-(`tags.yaml`, `camera/<drone>.yaml`, `drones.yaml`, `fleet.yaml`, `dongles.json`, `map.yaml`).
-The scripts bring up the drone's WiFi themselves (NetworkManager profile per
-`drones.yaml`); there is no manual connect step.
+(`tags.yaml`, `camera/<drone>.yaml`, `fleet.yaml`, `dongles.json`, `map.yaml`). Per-drone
+calibration identity (iface, ssid, bssid, serial) lives in `fleet.yaml`'s `drones:`
+section. The scripts bring up the drone's WiFi themselves (NetworkManager profile per
+that identity); there is no manual connect step.
 
 ## Safety rule
 

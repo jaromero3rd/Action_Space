@@ -83,10 +83,10 @@ software teardown.
 .venv/bin/python -u tello_dual_video.py --no_fly TELLO-1   # no takeoff, one drone
 ```
 
-Each flight writes:
+Each flight writes everything into one place, `recordings/`:
 - a recording `recordings/<session>_<drone>_<stamp>.avi`,
-- a live track `outputs/tracks/<session>_<drone>.live.jsonl` (time, wifi, pose),
-- a **training log** `outputs/train/<session>_<drone>.jsonl` -- one row per ~20 Hz tick
+- a live track `recordings/<session>_<drone>.live.jsonl` (time, wifi, pose),
+- a **training log** `recordings/<session>_<drone>.train.jsonl` -- one row per ~20 Hz tick
   with the action and the drone's response, for fitting an action -> motion MLP:
   `{t, rc:[right,forward,up,yaw], vel:{r,f,u,yaw}, h, tag:{x,y,z,range}, mode, fresh}`.
 
@@ -99,8 +99,8 @@ flying on odometry. It approaches to `LAND_RANGE_M` and lands when sighted + cen
 
 ```bash
 .venv/bin/python scripts/extract_track.py      # reconstruct a track for every recording lacking one
-.venv/bin/python scripts/build_flight_viz.py   # bake ALL tracks into outputs/flight_viz.html
-xdg-open outputs/flight_viz.html
+.venv/bin/python scripts/build_flight_viz.py   # bake ALL tracks into recordings/flight_viz.html
+xdg-open recordings/flight_viz.html
 ```
 
 The page shows, per flight: a top-down path (where the drone thought it was in the

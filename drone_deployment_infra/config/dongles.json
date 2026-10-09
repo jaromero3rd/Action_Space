@@ -41,8 +41,8 @@
       "number": 5,
       "iface": "wlx58d8125ebaf2",
       "mac": "58:d8:12:5e:ba:f2",
-      "drone": "",
-      "ssid": "",
+      "drone": "TELLO-5",
+      "ssid": "TELLO-5",
       "video_port": 17005,
       "note": ""
     },

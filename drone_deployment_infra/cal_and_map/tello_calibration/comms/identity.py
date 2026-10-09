@@ -1,4 +1,4 @@
-"""Check that the drone we are talking to is the one named in drones.yaml.
+"""Check that the drone we are talking to is the one named in fleet.yaml.
 
 Pure functions returning (ok, detail) so they can be tested without hardware.
 """
@@ -24,7 +24,7 @@ def check_wifi(drone: DroneConfig, wifi: WifiLink | None) -> tuple[bool, str]:
 
 
 def check_serial(drone: DroneConfig, reply: str | None) -> tuple[bool, str]:
-    """Compare the sn? reply with drones.yaml. A null serial in config never passes."""
+    """Compare the sn? reply with fleet.yaml. A null serial in config never passes."""
     if reply is None:
         return False, "no reply to sn?"
     unsupported = is_unsupported_reply(reply)
@@ -32,8 +32,8 @@ def check_serial(drone: DroneConfig, reply: str | None) -> tuple[bool, str]:
     if drone.serial is None:
         if unsupported:
             return False, (f"firmware answered {reply!r}. If that is expected, set "
-                           f"'serial: {SERIAL_UNSUPPORTED}' for {drone.name} in drones.yaml")
-        return False, f"sn? = {reply!r}. Add 'serial: \"{reply}\"' for {drone.name} in drones.yaml"
+                           f"'serial: {SERIAL_UNSUPPORTED}' for {drone.name} in fleet.yaml")
+        return False, f"sn? = {reply!r}. Add 'serial: \"{reply}\"' for {drone.name} in fleet.yaml"
 
     if drone.serial == SERIAL_UNSUPPORTED:
         if unsupported:

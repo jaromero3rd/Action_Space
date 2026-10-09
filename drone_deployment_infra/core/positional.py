@@ -30,12 +30,15 @@ class Positioner:
     def __init__(self, drone: str, map_path: Path | None = None,
                  camera_path: Path | None = None, tags_path: Path | None = None) -> None:
         map_path = Path(map_path) if map_path else CONFIG_DIR / "map.yaml"
-        camera_path = Path(camera_path) if camera_path else CONFIG_DIR / "camera" / f"{drone}.yaml"
         if not map_path.exists():
             raise FileNotFoundError(f"no map at {map_path}; build it with cal_and_map 05_map.py")
-        if not camera_path.exists():
-            raise FileNotFoundError(f"no camera calib at {camera_path}; run cal_and_map 03_calibrate.py")
-        K, dist = camera_from_dict(load_yaml(camera_path))
+        if camera_path is None:
+            camera_path = CONFIG_DIR / "camera" / f"{drone}.yaml"
+            if not camera_path.exists():       # not calibrated yet: fall back to a shared default
+                camera_path = CONFIG_DIR / "camera" / "default.yaml"
+        if not Path(camera_path).exists():
+            raise FileNotFoundError(f"no camera calib for {drone} and no camera/default.yaml")
+        K, dist = camera_from_dict(load_yaml(Path(camera_path)))
         self.tag_map = TagMap.load(map_path)
         cfg = load_tag_config(tags_path) if tags_path else load_tag_config()
         self.detector = TagDetector(cfg, K, dist)
@@ -73,4 +76,15 @@ class Positioner:
             "xyz": [round(float(v), 3) for v in xyz],
             "range": round(float(np.linalg.norm(xyz)), 3),
             "to_origin_cam": [float(v / norm) for v in to_origin],
+            "R": [[float(rot[i, j]) for j in range(3)] for i in range(3)],  # cam -> origin
         }
+
+    def direction_to(self, result: dict, target_xyz) -> list[float]:
+        """Unit direction from the drone to an arbitrary origin-frame point, in the CAMERA
+        frame (x right, y down, z forward). Lets a policy steer to a landing spot that is
+        offset from the origin. `result` is a locate() dict (uses its R and xyz)."""
+        R = np.asarray(result["R"], float)
+        p = np.asarray(result["xyz"], float)
+        v = R.T @ (np.asarray(target_xyz, float) - p)
+        n = float(np.linalg.norm(v)) or 1.0
+        return [float(x / n) for x in v]

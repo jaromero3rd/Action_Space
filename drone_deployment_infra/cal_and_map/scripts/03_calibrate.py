@@ -274,7 +274,7 @@ def live(args: argparse.Namespace, criteria: Criteria) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--drone", help="drone name in config/drones.yaml (live capture)")
+    parser.add_argument("--drone", help="drone name in config/fleet.yaml (live capture)")
     parser.add_argument("--square-mm", type=float, help="measured square edge in mm (live)")
     parser.add_argument("--board", type=Path, help="board yaml from 02_make_charuco.py")
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True,

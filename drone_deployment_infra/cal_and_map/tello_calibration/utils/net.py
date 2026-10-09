@@ -58,7 +58,7 @@ def resolve_local_ip(iface: str | None = None, local_ip: str | None = None) -> T
         )
     listing = ", ".join(f"{c.name}={c.ip}" for c in candidates)
     raise TelloNetworkError(
-        f"Several interfaces on {TELLO_SUBNET}: {listing}. Set local_ip in drones.yaml."
+        f"Several interfaces on {TELLO_SUBNET}: {listing}. Set local_ip in fleet.yaml."
     )
 
 

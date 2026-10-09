@@ -178,7 +178,9 @@ def sdk(sock, cmd, timeout=3):
     sock.sendto(cmd.encode(), (TELLO, 8889))
     try:
         data, _ = sock.recvfrom(256)
-        return data.decode(errors="replace").strip()
+        # Normalize case: some Tello firmware replies "OK", others "ok". All
+        # callers compare against lowercase "ok", so fold it here once.
+        return data.decode(errors="replace").strip().lower()
     except (socket.timeout, OSError):
         return "timeout"
 
@@ -291,8 +293,8 @@ def log_track(session, name, poses, ready, modes, heights, stop):
     logged live, so WiFi connection and the drone's pose share one real-time
     axis and the flight visualization can line up signal drops with the path.
     """
-    os.makedirs(os.path.join(OUTPUTS_DIR, "tracks"), exist_ok=True)
-    path = os.path.join(OUTPUTS_DIR, "tracks", f"{session}_{name}.live.jsonl")
+    os.makedirs(RECORD_DIR, exist_ok=True)
+    path = os.path.join(RECORD_DIR, f"{session}_{name}.live.jsonl")
     start = time.time()
     with open(path, "w", encoding="utf-8") as handle:
         print(f"{name} track {path}", flush=True)
@@ -358,8 +360,8 @@ def run_drone(name, iface, cmd, video, state, local_port, frames, poses, heights
     # Training data: one row per control tick -- the action (rc) and the drone's
     # measured motion/state -- to fit an MLP of action -> how the drone moves.
     run_start = time.time()
-    os.makedirs(os.path.join(OUTPUTS_DIR, "train"), exist_ok=True)
-    train_path = os.path.join(OUTPUTS_DIR, "train", f"{stats[name].get('session', '000')}_{name}.jsonl")
+    os.makedirs(RECORD_DIR, exist_ok=True)
+    train_path = os.path.join(RECORD_DIR, f"{stats[name].get('session', '000')}_{name}.train.jsonl")
     train_log = open(train_path, "w", encoding="utf-8")
     print(f"{name} training data {train_path}", flush=True)
     while not stop.is_set():
