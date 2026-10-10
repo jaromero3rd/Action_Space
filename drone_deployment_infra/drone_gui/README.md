@@ -21,6 +21,10 @@ Ctrl-C lands anything airborne and quits. Don't run it at the same time as
 - **Controls**: one panel per drone in the same numbered order: link, battery, height,
   tags, last message, WiFi connect, target tag, standoff, flight buttons, stick pad.
 - 2 columns on narrow windows, 1 on phones.
+- **Telemetry** box in the top bar: ON/off, rate in Hz, destinations (`host:port, ...`)
+  and the live send rate, datagram size and sequence number. Changes apply at once.
+  Each tile and panel shows its team (ATTACK red / DEFENSE blue); the panel's Team
+  selector overrides it. Format, teams and a listener: [../drone_telemetry/](../drone_telemetry/README.md).
 
 ## Controls
 

@@ -19,7 +19,6 @@ package is editable-installed from `cal_and_map/`:
 | `config/` | All configuration: tags to map + sizes, camera focal lengths, dongle→drone map, fleet roles. See `config/README.md`. |
 | `core/` | Infrastructure: connect the quick-connect drones (`tello_link.py`), the flight engine (`tello_dual_video.py`), the positional lookup (`positional.py`), flight-track viz. See `core/README.md`. |
 | `drone_deployment_tests/` | The policies and tests we fly down the track. See its README. |
-| `drone_gui/` | Browser GUI: see/connect every dongle's drone, live camera with tags, manual + auto (fly to a tag and land) for several drones at once. See its README. |
 | `recordings/` | All flight recordings (`<session>_<drone>_<stamp>.avi`) and reports. |
 | `outputs/` | Per-flight live tracks, training logs, and the flight visualization. |
 

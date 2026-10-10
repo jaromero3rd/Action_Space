@@ -17,6 +17,15 @@ header h1{font-size:18px;margin:0 6px 0 0}
 .count.ok b{color:var(--ok)}.count.warn b{color:var(--warn)}
 #simtag{background:#3d3412;color:var(--warn);border-radius:6px;padding:3px 8px;font-weight:600;font-size:12px}
 .spacer{flex:1}
+.telem{display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:#11141a;border:1px solid var(--line);border-radius:8px;padding:4px 8px}
+.telem b{font-size:12px;color:var(--dim);font-weight:600}
+.telem input{width:56px}.telem input.dest{width:170px}
+.telem .t-stat{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);min-width:120px}
+.telem .t-stat.bad{color:var(--bad)}.telem .t-stat.warn{color:var(--warn)}
+button.on{background:#173d27;border-color:#2e7d4a;color:var(--ok)}
+.chip.attack{background:#7a1f1f;color:#ffd6d6}.chip.defense{background:#1f3f7a;color:#d6e6ff}
+.pill.attack{background:#5a1717;color:#ff9a9a}.pill.defense{background:#17305a;color:#9ac2ff}
+select{background:#11141a;color:var(--text);border:1px solid var(--line);border-radius:5px;padding:3px 4px;font:inherit;font-size:13px}
 button{background:#262b36;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
 button:hover{border-color:var(--accent)}
 button:disabled{opacity:.4;cursor:default}
@@ -74,9 +83,17 @@ kbd{background:#262b36;border:1px solid var(--line);border-radius:4px;padding:0 
     <div class="count warn"><b id="c-flying">0</b><span>flying</span></div>
     <div class="count"><b id="c-tags">0</b><span>see target</span></div>
     <div class="count"><b id="c-slots">0</b><span id="c-slots-l">dongles</span></div>
+    <div class="count"><b id="c-teams">0 · 0</b><span>attack · defense</span></div>
   </div>
   <span id="simtag" hidden>SIMULATION</span>
   <span class="spacer"></span>
+  <div class="telem" title="UDP JSON telemetry of every drone (team, pose, battery...). Format: drone_telemetry/README.md">
+    <b>Telemetry</b>
+    <button id="t-toggle">off</button>
+    <input id="t-hz" type="number" min="0.5" max="50" step="0.5" title="datagrams per second (0.5-50)"><label>Hz</label>
+    <input id="t-dest" class="dest" title="host:port, comma-separated" placeholder="127.0.0.1:9100">
+    <span class="t-stat" id="t-stat"></span>
+  </div>
   <button id="connectall" title="Connect every drone that isn't connected yet">Connect all</button>
   <button class="go" id="autoall" title="Every connected drone with a target tag: take off (2 s apart), fly to its tag, land in front of it">Auto all</button>
   <button class="land" id="landall" title="Space">LAND ALL <kbd>Space</kbd></button>
@@ -122,12 +139,12 @@ function makeUnit(d) {
   const tile = document.createElement('div');
   tile.className = 'tile';
   tile.innerHTML = `<div class="ph">no video</div><img alt="" hidden>
-    <div class="top"><span class="chip n"></span><span class="chip t-name"></span><span class="spacer"></span><span class="chip t-bat"></span></div>
+    <div class="top"><span class="chip n"></span><span class="chip t-team"></span><span class="chip t-name"></span><span class="spacer"></span><span class="chip t-bat"></span></div>
     <div class="bot"><span class="chip t-mode"></span><span class="chip t-tag"></span></div>`;
   const panel = document.createElement('section');
   panel.className = 'panel';
   panel.innerHTML = `
-    <div class="title"><span class="chip n"></span><h2></h2><span class="pill p-link"></span><span class="pill p-mode"></span><span class="pill p-cam" hidden>provisional cam</span></div>
+    <div class="title"><span class="chip n"></span><h2></h2><span class="pill p-team"></span><span class="pill p-link"></span><span class="pill p-mode"></span><span class="pill p-cam" hidden>provisional cam</span></div>
     <div class="stats">
       <div class="stat"><b class="s-bat">–</b><span>battery</span></div>
       <div class="stat"><b class="s-h">–</b><span>height</span></div>
@@ -140,6 +157,8 @@ function makeUnit(d) {
       <button class="b-connect">Connect</button><button class="b-disconnect">Disconnect</button>
     </div>
     <div class="row">
+      <label>Team</label><select class="team" title="Overrides drone_telemetry/roles.yaml for this drone">
+        <option value="auto">auto</option><option value="attack">attack</option><option value="defense">defense</option><option value="none">none</option></select>
       <label>Tag</label><input class="tag" type="number" min="0" max="586">
       <label>Land at</label><input class="standoff" type="number" step="0.1" min="0.5" max="3"><label>m</label>
       <button class="b-reset" hidden title="Simulation: put the drone back at a random start pose">Reset pose</button>
@@ -163,7 +182,7 @@ function makeUnit(d) {
     </div>`;
   const q = s => panel.querySelector(s), qt = s => tile.querySelector(s);
   const r = {img: qt('img'), ph: qt('.ph'), tn: tile.querySelectorAll('.n'), tname: qt('.t-name'), tbat: qt('.t-bat'),
-    tmode: qt('.t-mode'), ttag: qt('.t-tag'), pn: q('.n'), name: q('h2'), link: q('.p-link'), mode: q('.p-mode'),
+    tmode: qt('.t-mode'), tteam: qt('.t-team'), pteam: q('.p-team'), team: q('.team'), ttag: qt('.t-tag'), pn: q('.n'), name: q('h2'), link: q('.p-link'), mode: q('.p-mode'),
     cam: q('.p-cam'), bat: q('.s-bat'), h: q('.s-h'), tags: q('.s-tags'), air: q('.s-air'), msg: q('.msg'),
     ssid: q('.ssid'), tag: q('.tag'), standoff: q('.standoff'), connect: q('.b-connect'), disconnect: q('.b-disconnect'),
     auto: q('.b-auto'), takeoff: q('.b-takeoff'), hover: q('.b-hover'), land: q('.b-land'), reset: q('.b-reset')};
@@ -178,6 +197,7 @@ function makeUnit(d) {
   armed(q('.b-estop'), () => post(`${base}/emergency`));
   r.tag.onchange = () => post(`${base}/config`, {target_tag: r.tag.value});
   r.standoff.onchange = () => post(`${base}/config`, {standoff: r.standoff.value});
+  r.team.onchange = () => post(`${base}/config`, {team: r.team.value});
   tile.addEventListener('click', () => select(d.iface));
   panel.addEventListener('click', e => { if (!e.target.closest('input')) select(d.iface); });
   panel.querySelectorAll('[data-rc]').forEach(b => {
@@ -243,6 +263,9 @@ function render(state) {
   document.getElementById('c-flying').textContent = ds.filter(d => d.flying).length;
   document.getElementById('c-tags').textContent = ds.filter(d => d.tags.some(t => t.id === d.target_tag)).length;
   document.getElementById('c-slots').textContent = ds.length;
+  document.getElementById('c-teams').textContent =
+    `${ds.filter(d => d.team === 'attack').length} · ${ds.filter(d => d.team === 'defense').length}`;
+  renderTelemetry(state.telemetry);
   document.getElementById('c-slots-l').textContent = sim ? 'simulated' : (ds.length === 1 ? 'dongle' : 'dongles');
 
   ds.forEach((d, i) => {
@@ -253,6 +276,7 @@ function render(state) {
     const seesTarget = d.tags.find(t => t.id === d.target_tag);
 
     // camera tile
+    chip(r.tteam, d.team ? d.team.toUpperCase() : '', d.team);
     chip(r.tname, d.name);
     chip(r.tbat, d.battery != null ? `${d.battery}%` : '', batCls);
     chip(r.tmode, d.flying || d.busy ? (d.busy || d.mode).toUpperCase() : (d.link ? 'ground' : 'offline'), d.flying ? 'warn' : (d.link ? '' : 'bad'));
@@ -266,6 +290,7 @@ function render(state) {
     // control panel
     r.name.textContent = d.name + (d.number != null && !d.sim ? ` · #${d.number}` : '');
     r.name.title = `${d.iface}` + (d.ip ? ` · ${d.ip}` : '');
+    r.pteam.textContent = d.team || 'no team'; r.pteam.className = 'pill p-team ' + (d.team || '');
     pill(r.link, d.link ? 'linked' : (d.ssid ? 'WiFi only' : 'no WiFi'), d.link ? 'ok' : (d.ssid ? 'warn' : 'bad'));
     pill(r.mode, d.busy || d.mode, d.flying ? 'warn' : '');
     r.cam.hidden = !d.provisional_cam;
@@ -286,6 +311,28 @@ function render(state) {
   });
   if (!selected && ds.length) select(ds[0].iface);
 }
+
+const tToggle = document.getElementById('t-toggle'), tHz = document.getElementById('t-hz'),
+      tDest = document.getElementById('t-dest'), tStat = document.getElementById('t-stat');
+let telemOn = false;
+function renderTelemetry(t) {
+  if (!t) return;
+  telemOn = t.enabled;
+  tToggle.textContent = t.enabled ? 'ON' : 'off';
+  tToggle.className = t.enabled ? 'on' : '';
+  if (document.activeElement !== tHz) tHz.value = t.hz;
+  if (document.activeElement !== tDest) tDest.value = t.destinations.join(', ');
+  tStat.textContent = t.enabled ? `${t.rate} Hz · ${t.bytes} B · #${t.seq}` : 'not sending';
+  tStat.className = 't-stat' + (t.error ? ' bad' : t.warning ? ' warn' : '');
+  tStat.title = t.error || t.warning || `${t.sent} datagrams sent, ${t.errors} errors`;
+}
+async function telemetry(body) {
+  const res = await fetch('/api/telemetry', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!res.ok) { const e = await res.json(); tStat.textContent = e.error; tStat.className = 't-stat bad'; }
+}
+tToggle.onclick = () => telemetry({enabled: !telemOn});
+tHz.onchange = () => telemetry({hz: Number(tHz.value)});
+tDest.onchange = () => telemetry({destinations: tDest.value});
 
 let lastState = {drones: []};
 async function poll() {

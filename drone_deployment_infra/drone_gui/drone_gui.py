@@ -10,6 +10,9 @@ live camera with AprilTags outlined, and per-drone Connect / Take off / Land /
 manual sticks / Auto. Auto = fly to the assigned tag and land STANDOFF metres in
 front of it. "Auto all" does that for every connected drone at the same time.
 
+Telemetry: every drone's team (attack/defense), pose, battery... is published as UDP
+JSON at a rate set live in the page (see ../drone_telemetry/README.md).
+
 Don't run this together with core/tello_link.py or tello_dual_video.py: they bind
 the same per-dongle ports and would steal each other's packets.
 """
@@ -28,7 +31,9 @@ from pathlib import Path
 from tello_unit import DD_ROOT, Drone, load_tag_sizes
 
 sys.path.insert(0, str(DD_ROOT / "core"))
+sys.path.insert(0, str(DD_ROOT / "drone_telemetry"))
 from tello_dongle_setup import REGISTRY_PATH, load_registry, present_ifaces  # noqa: E402
+from telemetry import TEAMS, Publisher, load_roles  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 # Default tag each drone flies to in Auto; change it live in the GUI.
@@ -41,6 +46,10 @@ class Fleet:
         self.drones: dict[str, Drone] = {}     # by iface
         self.tag_sizes = load_tag_sizes()
         self.lock = threading.Lock()
+        self.roles = load_roles()
+        self.team_override: dict[str, str] = dict(self.roles["drones"])   # name -> team, set from the GUI
+        self.publisher = Publisher(self.telemetry, "sim" if sim else "real", self.roles["destinations"],
+                                   self.roles["hz"], self.roles["enabled"])
         if sim:
             # Simulated drones only: sim i looks at (and defaults to) tag i (tags 1-9 repeat).
             from sim_drone import SimDrone
@@ -85,6 +94,21 @@ class Fleet:
     def all(self) -> list[Drone]:
         return sorted(self.drones.values(), key=lambda d: (d.number is None, d.number or 0, d.iface))
 
+    def team(self, drone: Drone, slot: int) -> str:
+        """GUI override, then roles.yaml by name, then roles.yaml by grid slot; '' = no team."""
+        if drone.name in self.team_override:
+            return self.team_override[drone.name]
+        return self.roles["slots"].get(slot, "")
+
+    def telemetry(self) -> list[dict]:
+        return [d.telemetry(i, self.team(d, i)) for i, d in enumerate(self.all(), 1)]
+
+    def states(self) -> list[dict]:
+        out = []
+        for i, d in enumerate(self.all(), 1):
+            out.append(dict(d.status(), slot=i, team=self.team(d, i)))
+        return out
+
     def auto_all(self) -> None:
         ready = [d for d in self.all() if d.link and d.target_tag is not None]
         def run():
@@ -99,6 +123,7 @@ class Fleet:
             drone.land("land all")
 
     def close(self) -> None:
+        self.publisher.close()
         threads = [threading.Thread(target=d.close) for d in self.all()]
         for t in threads:
             t.start()
@@ -126,7 +151,7 @@ def make_handler(fleet: Fleet):
             if self.path in ("/", "/index.html"):
                 self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif self.path == "/api/state":
-                self._json({"drones": [d.status() for d in fleet.all()], "t": time.time()})
+                self._json({"drones": fleet.states(), "telemetry": fleet.publisher.status(), "t": time.time()})
             elif self.path.startswith("/video/"):
                 self._mjpeg(self.path.split("/")[2])
             elif self.path.startswith("/snap/"):
@@ -172,7 +197,12 @@ def make_handler(fleet: Fleet):
                 return self._send(404, b"{}")
             if len(parts) == 2:
                 action = parts[1]
-                if action == "connect_all":
+                if action == "telemetry":
+                    try:
+                        fleet.publisher.configure(body.get("enabled"), body.get("hz"), body.get("destinations"))
+                    except (ValueError, TypeError) as exc:
+                        return self._json({"error": str(exc)}, 400)
+                elif action == "connect_all":
                     for d in fleet.all():
                         if not (d.link and d.streaming) and (d.drone or d.ssid):
                             d.connect()
@@ -210,6 +240,11 @@ def make_handler(fleet: Fleet):
                     drone.target_tag = int(tag) if tag not in (None, "") else None
                 if "standoff" in body:
                     drone.standoff = max(0.5, min(3.0, float(body["standoff"])))
+                if "team" in body:
+                    if body["team"] in TEAMS or body["team"] == "none":
+                        fleet.team_override[drone.name] = "" if body["team"] == "none" else body["team"]
+                    else:   # "auto": back to roles.yaml
+                        fleet.team_override.pop(drone.name, None)
             elif action == "emergency":
                 drone.emergency()
             elif action == "reset" and getattr(drone, "is_sim", False):

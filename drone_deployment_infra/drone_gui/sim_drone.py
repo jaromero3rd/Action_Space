@@ -31,6 +31,10 @@ def tag_texture(tag_id: int, px: int = 240) -> np.ndarray:
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
     cell = px // 10
     marker = cv2.aruco.generateImageMarker(dictionary, tag_id, cell * 8)
+    # OpenCV draws its AprilTag markers rotated 180 deg from the official tag36h11 images
+    # (the ones printed for the real tags): pupil_apriltags then puts corner 0 top-right
+    # instead of bottom-left and every pose comes out with x and y negated. Undo that.
+    marker = cv2.rotate(marker, cv2.ROTATE_180)
     return cv2.copyMakeBorder(marker, cell, cell, cell, cell, cv2.BORDER_CONSTANT, value=255)
 
 
@@ -113,6 +117,13 @@ class SimDrone(Drone):
     def close(self) -> None:
         self.stop.set()
 
+    def telemetry(self, slot: int, team: str) -> dict:
+        """Adds ground truth in the same convention as `pose` (camera in the tag frame)."""
+        entry = super().telemetry(slot, team)
+        entry["truth"] = {"tag": self.sim_tag, "xyz": [round(self.x, 2), round(TAG_HEIGHT_M - self.h, 2),
+                                                        round(-self.z, 2)], "yaw": round(self.psi, 1)}
+        return entry
+
     # ---------------------------------------------------------------- simulation
     def _sim_loop(self) -> None:
         last = time.time()
@@ -134,6 +145,9 @@ class SimDrone(Drone):
                 self.x += (f[0] * v_f + r[0] * v_r) * dt
                 self.z = max(0.25, self.z + (f[1] * v_f + r[1] * v_r) * dt)
                 self.h = min(2.5, max(0.1, self.h + (up / 100.0) * 0.6 * dt))
+                self.vel = [round(v_f, 2), round(v_r, 2), round(-(up / 100.0) * 0.6, 2)]   # Tello: x fwd, y right, z down
+            else:
+                self.vel = [0.0, 0.0, 0.0]
             drain += dt / (20.0 if airborne else 90.0)
             if drain >= 1.0:
                 drain -= 1.0
@@ -141,6 +155,7 @@ class SimDrone(Drone):
             if self.streaming:
                 self.state_t = now                          # "state packets" arrive while linked
                 self.height = max(0.0, self.h - 0.1)
+                self.tof = self.h
                 self.frame = self._render()
                 self.frame_t = now
                 self.frames += 1

@@ -131,6 +131,8 @@ class Drone:
         self.battery: int | None = None
         self.height: float | None = None
         self.temp: int | None = None
+        self.tof: float | None = None          # downward range sensor, m
+        self.vel: list[float] | None = None    # vgx/vgy/vgz, m/s (Tello's own axes)
         self.msg = "idle"
 
         # Video / detection
@@ -141,6 +143,7 @@ class Drone:
         self.tags: list[dict] = []
         self.tags_t = 0.0
         self._jpeg: tuple[float, bytes] | None = None
+        self.pose: dict | None = None         # last camera pose in a tag frame, kept while stale
 
         # Flight
         self.flying = False
@@ -372,6 +375,8 @@ class Drone:
                 self.battery = int(fields["bat"])
                 self.height = int(fields["h"]) / 100.0
                 self.temp = int(fields.get("temph", 0))
+                self.tof = int(fields["tof"]) / 100.0 if "tof" in fields else None
+                self.vel = [int(fields[k]) / 10.0 for k in ("vgx", "vgy", "vgz")]   # dm/s -> m/s
             except (KeyError, ValueError):
                 pass
 
@@ -441,6 +446,12 @@ class Drone:
                 tags.append(entry)
             self.tags = tags
             self.tags_t = time.time()
+            posed = [t for t in tags if "cam" in t]
+            if posed:
+                best = next((t for t in posed if t["id"] == self.target_tag), min(posed, key=lambda t: t["range"]))
+                x, y, z = best["cam"]
+                self.pose = {"tag": best["id"], "xyz": [round(x, 2), round(y, 2), round(z, 2)],
+                             "yaw": round(-best["yaw_err"], 1), "stamp": self.tags_t}
 
     def target_obs(self) -> dict | None:
         if self.target_tag is None or time.time() - self.tags_t > TAG_FRESH_S:
@@ -532,6 +543,16 @@ class Drone:
             return None
         self._jpeg = (t, buf.tobytes())
         return self._jpeg[1]
+
+    def telemetry(self, slot: int, team: str) -> dict:
+        """This drone's entry in a telemetry datagram (format: drone_telemetry/README.md)."""
+        pose = None
+        if self.pose:
+            pose = {k: v for k, v in self.pose.items() if k != "stamp"}
+            pose["age"] = round(time.time() - self.pose["stamp"], 2)
+        return {"name": self.name, "slot": slot, "team": team, "link": self.link, "fly": self.flying,
+                "mode": self.busy or self.mode, "bat": self.battery, "h": self.height,
+                "tof": self.tof, "vel": self.vel, "pose": pose}
 
     def status(self) -> dict:
         now = time.time()
