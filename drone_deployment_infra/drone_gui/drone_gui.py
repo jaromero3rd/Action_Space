@@ -46,6 +46,7 @@ class Fleet:
         self.drones: dict[str, Drone] = {}     # by iface
         self.tag_sizes = load_tag_sizes()
         self.lock = threading.Lock()
+        self.sim = sim
         self.roles = load_roles()
         self.team_override: dict[str, str] = dict(self.roles["drones"])   # name -> team, set from the GUI
         self.publisher = Publisher(self.telemetry, "sim" if sim else "real", self.roles["destinations"],
@@ -213,6 +214,10 @@ def make_handler(fleet: Fleet):
                 elif action == "emergency_all":
                     for d in fleet.all():
                         d.emergency()
+                elif action == "shutdown" and fleet.sim:
+                    # Sim only: a page button that kills a real fleet's server is too easy to hit.
+                    print("stop requested from the page", flush=True)
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
                 else:
                     return self._json({"error": f"unknown {action}"}, 400)
                 return self._json({"ok": True})

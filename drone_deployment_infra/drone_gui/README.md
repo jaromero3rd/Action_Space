@@ -8,7 +8,8 @@ cd drone_deployment_infra/drone_gui
 ../../.venv/bin/python -u drone_gui.py --sim 8 --port 8781   # 8 simulated drones, no hardware
 ```
 
-Ctrl-C lands anything airborne and quits. Don't run it at the same time as
+Ctrl-C lands anything airborne and quits. In `--sim` mode the top bar also has a
+**Stop sim** button (click twice) that shuts the simulator down. Don't run it at the same time as
 `core/tello_link.py` / `tello_dual_video.py` (they bind the same ports).
 
 ## What it shows

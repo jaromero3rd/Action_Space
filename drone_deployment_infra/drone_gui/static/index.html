@@ -86,6 +86,7 @@ kbd{background:#262b36;border:1px solid var(--line);border-radius:4px;padding:0 
     <div class="count"><b id="c-teams">0 · 0</b><span>attack · defense</span></div>
   </div>
   <span id="simtag" hidden>SIMULATION</span>
+  <button class="danger" id="stopsim" hidden title="Shut the simulator server down. Click twice.">Stop sim</button>
   <span class="spacer"></span>
   <div class="telem" title="UDP JSON telemetry of every drone (team, pose, battery...). Format: drone_telemetry/README.md">
     <b>Telemetry</b>
@@ -124,13 +125,13 @@ async function post(path, body) {
   } catch (e) { console.log('post failed', path, e); }
 }
 
-// Two-click arming for motor stop: first click arms for 3 s, second fires.
-function armed(btn, fire) {
+// Two-click arming for motor stop / stop sim: first click arms for 3 s, second fires.
+function armed(btn, fire, prompt = 'Again: motors OFF') {
   btn.addEventListener('click', e => {
     e.stopPropagation();
     if (btn.classList.contains('armed')) { btn.classList.remove('armed'); btn.textContent = btn.dataset.label; fire(); return; }
     btn.dataset.label = btn.dataset.label || btn.textContent;
-    btn.classList.add('armed'); btn.textContent = 'Again: motors OFF';
+    btn.classList.add('armed'); btn.textContent = prompt;
     setTimeout(() => { btn.classList.remove('armed'); btn.textContent = btn.dataset.label; }, 3000);
   });
 }
@@ -259,6 +260,7 @@ function render(state) {
 
   const sim = ds.some(d => d.sim);
   document.getElementById('simtag').hidden = !sim;
+  document.getElementById('stopsim').hidden = !sim;
   document.getElementById('c-linked').textContent = ds.filter(d => d.link).length;
   document.getElementById('c-flying').textContent = ds.filter(d => d.flying).length;
   document.getElementById('c-tags').textContent = ds.filter(d => d.tags.some(t => t.id === d.target_tag)).length;
@@ -339,7 +341,7 @@ async function poll() {
   try { lastState = await fetch('/api/state').then(r => r.json()); render(lastState); }
   catch (e) { document.getElementById('c-linked').textContent = '?'; }
 }
-setInterval(poll, 300); poll();
+const pollTimer = setInterval(poll, 300); poll();
 
 // Manual flying: keys + pad build a stick vector, sent at 10 Hz to the selected drone.
 const keys = new Set();
@@ -369,6 +371,12 @@ document.getElementById('connectall').onclick = () => post('/api/connect_all');
 document.getElementById('landall').onclick = () => post('/api/land_all');
 document.getElementById('autoall').onclick = () => post('/api/auto_all');
 armed(document.getElementById('estopall'), () => post('/api/emergency_all'));
+armed(document.getElementById('stopsim'), async () => {
+  await post('/api/shutdown');
+  clearInterval(pollTimer);
+  document.body.innerHTML = '<p style="padding:40px;font:16px system-ui;color:#e6e8ee">Simulator stopped. ' +
+    'Start it again with <code>drone_gui.py --sim 8 --port 8781</code>, then reload this page.</p>';
+}, 'Again: stop sim');
 </script>
 </body>
 </html>
