@@ -27,6 +27,9 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--episodes", type=int, default=0, help="Stop after this many finished episodes (0 = run forever).")
 parser.add_argument("--config-source", choices=("checkpoint", "current"), default="checkpoint")
 parser.add_argument("--report", type=str, default=None, help="Write exact episode cohort and summary to JSON.")
+parser.add_argument("--steps", type=int, default=0, help="Optional diagnostic step cap; incomplete cohorts remain failures.")
+parser.add_argument("--action-diagnostics", action="store_true",
+                    help="Measure raw Gaussian action saturation during room flights without changing commands.")
 parser.add_argument("--pilot", choices=("policy", "hold"), default="policy",
                     help="hold: room gate baseline with zero RC and continuous land request; not a policy score.")
 parser.add_argument("--no_dr", action="store_true", default=False, help="Fly with nominal dynamics (no randomization).")
@@ -134,6 +137,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     slots = base_env.num_isaac_envs if shared else env.num_envs
     cohort = EpisodeCohort(slots, args_cli.episodes or 10**12,
                            retain_records=bool(args_cli.episodes or args_cli.report))
+    if args_cli.action_diagnostics and (not shared or not args_cli.task.startswith("AS-Tello-Room")):
+        raise ValueError("Action diagnostics require a room task")
+    action_samples = {"all_flying": [], "first_8_seconds": [], "neighbor_within_0_8m": []}
     obs = env.reset()
     if shared:
         # a full reset staggers episode clocks for training; scored episodes must get the whole
@@ -145,6 +151,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         with torch.inference_mode():
             if args_cli.pilot == "policy":
                 actions, _ = agent.predict(obs, deterministic=True)
+                if args_cli.action_diagnostics:
+                    tensor_obs, _ = agent.policy.obs_to_tensor(obs)
+                    means = agent.policy.get_distribution(tensor_obs).distribution.mean.cpu().numpy()
+                    np.testing.assert_allclose(actions, np.clip(means, -1., 1.), atol=1e-6)
+                    u = base_env.unwrapped_env
+                    means = means.reshape(slots, u.cfg.num_drones, 5)
+                    active = np.asarray(cohort.counts) < np.asarray(cohort.quotas)
+                    flying = (~(u.taking_off | u.landing | u.landed)).cpu().numpy() & active[:, None]
+                    early = (u.episode_length_buf * dt < 8.).cpu().numpy()[:, None]
+                    near = (u._pairwise_distance(u._positions()).amin(-1) < .8).cpu().numpy()
+                    for name, mask in (("all_flying", flying), ("first_8_seconds", flying & early),
+                                       ("neighbor_within_0_8m", flying & near)):
+                        action_samples[name].append(means[mask, :4])
             else:
                 actions = np.zeros((env.num_envs, *env.action_space.shape), dtype=np.float32)
                 actions[:, 4::5] = 1.0
@@ -164,7 +183,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             summary = cohort.summary()
             values = ", ".join(f"{k.split('/')[-1]}={v:.3f}" for k, v in summary["metrics"].items())
             print(f"[{summary['episodes']} episodes] " + values)
+        if args_cli.episodes and (timestep + 1) % 100 == 0:
+            pending = np.flatnonzero(np.asarray(cohort.counts) < np.asarray(cohort.quotas))
+            print(f"[eval-progress] steps={timestep + 1} simulated_s={(timestep + 1) * dt:.3f} "
+                  f"completed={sum(cohort.counts)}/{args_cli.episodes} "
+                  f"pending_slots={len(pending)} first_pending={pending[:8].tolist()}", flush=True)
         if args_cli.episodes and cohort.complete:
+            break
+        if args_cli.steps and timestep + 1 >= args_cli.steps:
             break
         timestep += 1
         if args_cli.video and timestep == args_cli.video_length:
@@ -173,6 +199,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
     summary = cohort.summary()
+    diagnostics = None
+    if args_cli.action_diagnostics:
+        diagnostics = {"channels": ["right", "forward", "up", "yaw"],
+                       "scope": "Raw policy means before command clipping; counts are drone-steps, not trials",
+                       "buckets": {}}
+        for name, samples in action_samples.items():
+            values = np.concatenate(samples, axis=0) if samples else np.empty((0, 4))
+            diagnostics["buckets"][name] = {"drone_steps": len(values)}
+            if len(values):
+                diagnostics["buckets"][name].update(
+                    quantiles=np.quantile(values, [0., .1, .5, .9, 1.], axis=0).tolist(),
+                    abs_mean_gt_1=(np.abs(values) > 1.).mean(axis=0).tolist(),
+                    abs_mean_gt_1_3=(np.abs(values) > 1.3).mean(axis=0).tolist())
+        print("[action-diagnostics] " + json.dumps(diagnostics), flush=True)
     if args_cli.report:
         report = Path(args_cli.report)
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -184,6 +224,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                                      "seed": env_cfg.seed,
                                      "pilot": args_cli.pilot,
                                      "config_source": args_cli.config_source, "overrides": hydra_args,
+                                     "diagnostic_step_cap": args_cli.steps, "action_diagnostics": diagnostics,
                                      "summary": summary, "records": cohort.records}, indent=2, allow_nan=False) + "\n")
         print(f"[eval] report={report} complete={cohort.complete}")
     env.close()
