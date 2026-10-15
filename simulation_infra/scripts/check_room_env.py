@@ -31,8 +31,8 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--task", choices=["AS-Tello-Room-v0", "AS-Tello-Room-Single-v0"], default="AS-Tello-Room-v0")
-parser.add_argument("--test", choices=["geometry", "sensing", "commands", "motion", "baselines", "kalman", "central", "single", "curriculum", "precision", "all"],
+parser.add_argument("--task", choices=["AS-Tello-Room-v0", "AS-Tello-Room-Single-v0", "AS-Tello-Room-Team-v0", "AS-Tello-Room-Peer-v0"], default="AS-Tello-Room-v0")
+parser.add_argument("--test", choices=["geometry", "sensing", "commands", "motion", "baselines", "kalman", "central", "single", "team", "curriculum", "precision", "all"],
                     default="all")
 parser.add_argument("--num_envs", type=int, default=256)
 parser.add_argument("--episodes", type=int, default=256)
@@ -721,12 +721,79 @@ def test_precision(env, u):
         fresh_start(u)
 
 
+def test_team(env, u):
+    print("\n== simultaneous four-drone floor starts ==")
+    fresh_start(u)
+    check(u.cfg.num_drones == 4 and u.taking_off.all().item(), "all four drones begin takeoff together")
+    initial = u._positions().clone()
+    check(torch.allclose(initial[..., 2], torch.full_like(initial[..., 2], u.cfg.rest_height)),
+          "all drones start on the floor")
+    width = 48 if u.cfg.peer_observations else 25
+    check(all(value.shape == (u.num_envs, width) for value in u._get_observations().values()),
+          f"each drone has its expected {width}-feature observation")
+    ended = torch.zeros(u.num_envs, dtype=torch.bool, device=u.device)
+    for _ in range(int(5.0 / u.step_dt)):
+        env.step(sticks(u, (0, 0, 0, 0)))
+        ended |= u.outcome_valid
+    check(not u.taking_off.any().item() and not ended.any().item(),
+          "all four simultaneous takeoffs finish without an episode ending")
+    check((torch.linalg.norm(u._positions()[..., :2] - initial[..., :2], dim=-1) < .15).all().item(),
+          "simultaneous takeoff retains horizontal separation")
+    # Deliberately place one pair too close in room 0: collision termination must
+    # affect that whole room, but not neighboring vectorized simulation rooms.
+    pose = u._drones[1].data.root_state_w[:1, :7].clone()
+    pose[0, :3] = u._drones[0].data.root_pos_w[0] + torch.tensor([.20, 0., 0.], device=u.device)
+    u._drones[1].write_root_pose_to_sim(pose, env_ids=torch.tensor([0], device=u.device))
+    done, _ = u._get_dones()
+    check(all(value[0].item() for value in done.values()) and u.outcome_collision[0].item(),
+          "a pair inside 25 cm terminates the whole joint episode")
+    check(not u.outcome_collision[1:].any().item(), "collision is confined to its own simulation room")
+    fresh_start(u)
+    records = u.extras["episode_records"]
+    check(len(records) == 1 and abs(records[0]["metrics"]["Episode/min_separation_m"] - .20) < .001,
+          "the completed collision episode retains its actual minimum separation")
+    check(records[0]["metrics"]["Episode/timeout_rate"] == 0., "collision termination is not counted as a timeout")
+    u.episode_length_buf[:] = u.max_episode_length - 2
+    env.step(sticks(u, (0, 0, 0, 0)))
+    records = u.extras["episode_records"]
+    check(len(records) == u.num_envs and all(row["metrics"]["Episode/timeout_rate"] == 1. for row in records),
+          "every forced timeout is retained in the completed episode records")
+    fresh_start(u)
+    if u.cfg.collision_substeps:
+        # A pair passes inside the limit and separates before the next RC update.
+        # The per-physics-step detector must retain that violation and minimum.
+        pose = u._drones[1].data.root_state_w[:1, :7].clone()
+        original = pose.clone()
+        pose[0, :3] = u._drones[0].data.root_pos_w[0] + torch.tensor([.20, 0., 0.], device=u.device)
+        ids = torch.tensor([0], device=u.device)
+        u._drones[1].write_root_pose_to_sim(pose, env_ids=ids)
+        u._apply_action()
+        u._drones[1].write_root_pose_to_sim(original, env_ids=ids)
+        done, _ = u._get_dones()
+        check(all(value[0].item() for value in done.values()) and u.outcome_collision[0].item(),
+              "a collision between RC updates remains a joint failure after the pair separates")
+        check(abs(float(u.outcome_min_sep[0]) - .20) < .001,
+              "minimum separation includes physics substeps between RC updates")
+        fresh_start(u)
+        check(not u._substep_collision.any().item(), "substep collision state clears on reset")
+
+
 def main():
     cfg = load_cfg_from_registry(args_cli.task, "env_cfg_entry_point")
     cfg.scene.num_envs = args_cli.num_envs
     env = gym.make(args_cli.task, cfg=cfg)
     env.reset()
     u = env.unwrapped
+    if args_cli.task in ("AS-Tello-Room-Team-v0", "AS-Tello-Room-Peer-v0"):
+        if args_cli.test in ("geometry", "all"):
+            test_geometry(u)
+        if args_cli.test in ("team", "all"):
+            test_team(env, u)
+        if args_cli.test in ("central", "all"):
+            test_central(env, u)
+        print("\n" + ("ALL CHECKS PASSED" if not FAILURES else f"{len(FAILURES)} CHECK(S) FAILED:\n  " + "\n  ".join(FAILURES)))
+        env.close()
+        return
     if cfg.num_drones == 1:
         if args_cli.test in ("single", "all"):
             test_single(env, u)

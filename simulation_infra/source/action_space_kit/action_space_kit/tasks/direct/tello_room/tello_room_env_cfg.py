@@ -61,6 +61,11 @@ class TelloRoomEnvCfg(DirectMARLEnvCfg):
     the gaps between commands spread over ~58-90 ms like the real loop's."""
     episode_length_s = 75.0  # ~5.5 m at rc 25 (~0.18 m/s) is ~30 s, plus turns and searches
     debug_vis = False
+    peer_observations = False  # append estimated velocities, uncertainty and relative peer state
+    peer_sort_by_distance = False  # shared-policy experiments use nearest-first peer slots
+    peer_order_version = 2  # deterministic millimeter-distance keys; old snapshots restore version 1
+    log_terminal_state = False  # diagnostic records only; never changes observations or physics
+    collision_substeps = True  # detect proximity violations at every 2 ms physics step
 
     # the real Tello commands: the four rc channels [right, forward, up, yaw_cw] in [-1, 1] ->
     # integer rc -100..100 (the full SDK range), plus the SDK ``land`` command (5th output >
@@ -233,4 +238,7 @@ class TelloRoomEnvCfg(DirectMARLEnvCfg):
     rew_violation = -100.0  # crash, wall, ceiling, flipping, leaving the room ("crash loss")
     rew_collision = -1000.0  # to each drone closer than collision_distance to another ("collision loss")
     rew_scale_separation = -20.0  # per second, scaled by how far inside separation_distance
+    rew_predictive_separation = 0.0  # opt-in per-second cost for predicted close approaches
+    separation_lookahead_s = 1.5
+    separation_prediction_margin = 0.5
     rew_scale_action_rate = -0.05  # per second

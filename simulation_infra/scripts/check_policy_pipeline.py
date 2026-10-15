@@ -8,6 +8,8 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--checkpoint", required=True)
+parser.add_argument("--task", choices=("AS-Tello-Room-Single-v0", "AS-Tello-Room-Team-v0", "AS-Tello-Room-Peer-v0"),
+                    help="Defaults to the checkpoint's saved task")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(args)
@@ -18,9 +20,10 @@ import action_space_kit.tasks  # noqa: F401
 import gymnasium as gym
 import numpy as np
 import torch
+torch.set_num_threads(1)  # small batch CPU parity checks do not benefit from large thread pools
 from action_space_kit.rl.policy_export import norm_path_for
 from action_space_kit.rl.run_config import restore_run_config
-from action_space_kit.rl.sb3_shared import Sb3CentralVecEnv
+from action_space_kit.rl.sb3_shared import Sb3CentralVecEnv, Sb3SharedPolicyVecEnv
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecFrameStack, VecNormalize
 
@@ -52,12 +55,16 @@ def feed(u):
 
 
 def main():
-    cfg = load_cfg_from_registry("AS-Tello-Room-Single-v0", "env_cfg_entry_point")
-    agent_cfg = load_cfg_from_registry("AS-Tello-Room-Single-v0", "sb3_cfg_entry_point")
+    task = args.task or json.loads((Path(args.checkpoint).parent / "params/run.json").read_text())["task"]
+    if task not in ("AS-Tello-Room-Single-v0", "AS-Tello-Room-Team-v0", "AS-Tello-Room-Peer-v0"):
+        raise ValueError("Pipeline check supports the floor-start single and team room tasks")
+    cfg = load_cfg_from_registry(task, "env_cfg_entry_point")
+    agent_cfg = load_cfg_from_registry(task, "sb3_cfg_entry_point")
     restore_run_config(args.checkpoint, cfg, agent_cfg)
     cfg.scene.num_envs = 1
-    cfg.episode_length_s = 2.0  # force multiple timeout/reset cases for any single-drone checkpoint
-    base = Sb3CentralVecEnv(gym.make("AS-Tello-Room-Single-v0", cfg=cfg))
+    cfg.episode_length_s = 2.0  # force multiple timeout/reset cases during firmware takeoff
+    central = bool(agent_cfg.get("central", False))
+    base = (Sb3CentralVecEnv if central else Sb3SharedPolicyVecEnv)(gym.make(task, cfg=cfg))
     u = base.unwrapped_env
     normal = VecNormalize.load(str(norm_path_for(args.checkpoint)), base)
     normal.training = False
@@ -75,12 +82,14 @@ def main():
         if sample["reset"]:
             adapter.reset()
         result = adapter.step(sample)
-        raw = u._get_observations()["drone_0"][0].cpu().numpy()
+        per_drone = u._get_observations()
+        raw = torch.cat([per_drone[name][0] for name in cfg.possible_agents]).cpu().numpy()
         np.testing.assert_allclose(result["observation"], raw, atol=2e-6)
         action, _ = model.predict(obs, deterministic=True)
-        np.testing.assert_allclose(result["action"], action, rtol=1e-4, atol=2e-5)
+        shaped_action = action.reshape(cfg.num_drones, 5)
+        np.testing.assert_allclose(result["action"], shaped_action, rtol=1e-4, atol=2e-5)
         sample["expected_observation"] = raw.tolist()
-        sample["expected_action"] = action.tolist()
+        sample["expected_action"] = shaped_action.tolist()
         records.append(sample)
         obs, reward, done, infos = env.step(action)
         assert np.isfinite(reward).all()
@@ -90,8 +99,11 @@ def main():
             assert infos[0]["TimeLimit.truncated"]
             assert not np.array_equal(infos[0]["terminal_observation"], obs[0])
     assert resets >= 2
-    Path("outputs/policy_replay.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
-    print(f"[ok] 90 simulator/adapter observation, action and RC comparisons; {resets} timeout resets")
+    replay = ("outputs/shared_peer_policy_replay.jsonl" if cfg.peer_observations and not central else
+              "outputs/peer_policy_replay.jsonl" if cfg.peer_observations else
+              "outputs/team_policy_replay.jsonl" if cfg.num_drones > 1 else "outputs/policy_replay.jsonl")
+    Path(replay).write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    print(f"[ok] 90 simulator/adapter observation, action and RC comparisons for {cfg.num_drones} drone(s); {resets} timeout resets")
 
     # Controlled touchdown: the policy requests land while zero sticks hold over the target.
     # Remove measurement/link randomness to isolate the gate+firmware integration.
@@ -102,27 +114,31 @@ def main():
     cfg.spawn_yaw_noise = 0.0
     successes = 0
     for target_index in range(4):
-        cfg.fixed_spot_index = target_index
+        cfg.fixed_spot_index = target_index if cfg.num_drones == 1 else -1
         env.reset()
         u.episode_length_buf[:] = 0
-        u._spots[0, 0] = u._spot_table[target_index]
+        indices = (torch.arange(cfg.num_drones, device=u.device) + target_index) % 4
+        u._spots[0] = u._spot_table[indices]
         u.taking_off[:] = False
         u._fix_bias[:] = 0
         u._link_loss[:] = 0
-        pose = u._drones[0].data.root_state_w.clone()
-        pose[:, :3] = u._spots[:, 0] + u._wp_offset + u.scene.env_origins
         # Teleport orientation as well as position: the far-start heading may hide all
         # tags over this pad. A zero-stick gate fixture cannot turn to reacquire them.
-        yaw = torch.atan2(-u._spots[:, 0, 1], -u._spots[:, 0, 0])
-        zero = torch.zeros_like(yaw)
-        pose[:, 3:7] = quat_from_euler_xyz(zero, zero, yaw)
-        pose[:, 7:] = 0
-        u._drones[0].write_root_pose_to_sim(pose[:, :7])
-        u._drones[0].write_root_velocity_to_sim(pose[:, 7:])
+        for drone_index, drone in enumerate(u._drones):
+            pose = drone.data.root_state_w.clone()
+            pose[:, :3] = u._spots[:, drone_index] + u._wp_offset + u.scene.env_origins
+            yaw = torch.atan2(-u._spots[:, drone_index, 1], -u._spots[:, drone_index, 0])
+            zero = torch.zeros_like(yaw)
+            pose[:, 3:7] = quat_from_euler_xyz(zero, zero, yaw)
+            pose[:, 7:] = 0
+            drone.write_root_pose_to_sim(pose[:, :7])
+            drone.write_root_velocity_to_sim(pose[:, 7:])
+            u.pub_yaw[:, drone_index] = yaw
         u.pub_pos[:] = u._spots + u._wp_offset
-        u.pub_yaw[:] = yaw[:, None]
+        hold_land = np.tile(np.array([[0., 0., 0., 0., 1.]], np.float32),
+                            (1, cfg.num_drones) if central else (cfg.num_drones, 1))
         for tick in range(int(12 / u.step_dt)):
-            _, _, done, _ = env.step(np.array([[0.0, 0.0, 0.0, 0.0, 1.0]], np.float32))
+            _, _, done, _ = env.step(hold_land)
             if tick < int(cfg.land_dwell_s / u.step_dt):
                 assert not u.landing.any(), "Land sent before dwell completed"
             if done[0]:
@@ -144,7 +160,7 @@ def main():
             path.write_text(json.dumps(diagnostic, indent=2) + "\n")
             print(f"[FAIL] Controlled landing diagnostic: {path}")
         assert bool(done[0]) and bool(u.outcome_success[0]), f"Controlled landing failed for pad {target_index}"
-    print(f"[ok] Gated, on-target touchdown on all {successes} landing pads")
+    print(f"[ok] Gated, on-target touchdown for {cfg.num_drones} drone(s) across all {successes} pad assignments")
     env.close()
     print("POLICY PIPELINE PASSED")
 
