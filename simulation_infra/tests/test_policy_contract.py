@@ -35,9 +35,10 @@ finetune = load("finetune_test", RL / "finetune.py")
 symmetry = load("symmetry_test", RL / "symmetry.py")
 run_config = load("run_config_test", RL / "run_config.py")
 gate = load("gate_test", REPO / "drone_deployment_infra/core/landing_gate.py")
+peers = load("peers_contract_test", REPO / "drone_deployment_infra/core/team_features.py")
 sensor = load("sensor_test", RL.parent / "tags/sensing.py")
 room_map = load("room_map_test", RL.parent / "tags/room_map.py")
-with patch.dict(sys.modules, {"landing_gate": gate}):
+with patch.dict(sys.modules, {"landing_gate": gate, "team_features": peers}):
     adapter = load("adapter_test", REPO / "drone_deployment_infra/core/room_policy.py")
 
 
@@ -330,12 +331,18 @@ class PolicyContractTests(unittest.TestCase):
             (root / "params/run.json").write_text(
                 json.dumps({"env": {"x": 1, "nested": {"y": 2}}, "agent": {"central": True, "gamma": 0.995}})
             )
-            cfg = types.SimpleNamespace(x=9, nested=types.SimpleNamespace(y=8))
+            cfg = types.SimpleNamespace(x=9, nested=types.SimpleNamespace(y=8), collision_substeps=True,
+                                        peer_order_version=2)
             agent = {"gamma": 0.9}
             run_config.restore_run_config(root / "model.zip", cfg, agent, ["env.x=9"])
             self.assertEqual(cfg.x, 9)
             self.assertEqual(cfg.nested.y, 2)
             self.assertTrue(agent["central"])
+            self.assertFalse(cfg.collision_substeps)  # historical runs retain their original collision sampling
+            self.assertEqual(cfg.peer_order_version, 1)  # old checkpoints keep their input ordering
+            cfg.collision_substeps = True
+            run_config.restore_run_config(root / "model.zip", cfg, agent, ["env.collision_substeps=True"])
+            self.assertTrue(cfg.collision_substeps)
 
 
 if __name__ == "__main__":

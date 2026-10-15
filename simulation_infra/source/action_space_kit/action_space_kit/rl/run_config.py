@@ -104,6 +104,10 @@ def restore_run_config(checkpoint, env_cfg, agent_cfg, overrides=()):
         raise ValueError(
             "Saved task has a different drone count; a central policy cannot change its input/output layout"
         )
+    # Older runs checked proximity only once per RC update. Preserve replay unless
+    # evaluation/training explicitly opts into physics-substep collision checks.
+    config.setdefault("collision_substeps", False)
+    config.setdefault("peer_order_version", 1)  # retain historical nearest-neighbor slot ordering
     _apply(env_cfg, config)
     agent_cfg.update(agent)
     for path, value in explicit:

@@ -23,8 +23,10 @@ import numpy as np
 
 try:
     from .landing_gate import update_landing_gate
+    from .team_features import peer_feature_count, peer_features
 except ImportError:
     from landing_gate import update_landing_gate
+    from team_features import peer_feature_count, peer_features
 
 P_MAP_TO_WORLD = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
@@ -47,7 +49,7 @@ def camera_pose_to_world(xyz, rotation, tag10_height, camera_offset=(0.05, 0.0, 
 
 
 def build_observation(cfg, feed, actions, at_waypoint, landing):
-    """Exact 24/25-number room observation, per drone, before normalization."""
+    """Exact room observation before normalization, optionally extended with peer features."""
     p, yaw = np.asarray(feed["position"]), np.asarray(feed["yaw"])
     target = np.asarray(feed["target"])
     c, s = np.cos(yaw), np.sin(yaw)
@@ -78,11 +80,17 @@ def build_observation(cfg, feed, actions, at_waypoint, landing):
     ]
     if cfg.start_on_floor:
         blocks.append(column("taking_off"))
+    if getattr(cfg, "peer_observations", False):
+        blocks.append(peer_features(p, np.asarray(feed["velocity"]), yaw,
+                                    np.asarray(feed["position_variance"]),
+                                    np.asarray(feed["velocity_variance"]), np,
+                                    sort_neighbors=getattr(cfg, "peer_sort_by_distance", False),
+                                    order_version=getattr(cfg, "peer_order_version", 1)))
     return np.nan_to_num(np.concatenate(blocks, -1), nan=0.0, posinf=10.0, neginf=-10.0).astype(np.float32)
 
 
 class RoomPolicy:
-    """One central controller, same frame order and land gate as the simulator."""
+    """Central or shared-peer inference, with the simulator's frame order and landing gate."""
 
     def __init__(self, checkpoint):
         from stable_baselines3 import PPO
@@ -101,11 +109,15 @@ class RoomPolicy:
             with (ckpt.parent / name).open("rb") as f:
                 self.normalizer = pickle.load(f)
         self.n_stack = self.manifest["agent"].get("frame_stack", 1)
-        dim = (25 if cfg.start_on_floor else 24) * cfg.num_drones
+        self.central = bool(self.manifest["agent"].get("central", False))
+        own_dim = 25 if cfg.start_on_floor else 24
+        if getattr(cfg, "peer_observations", False):
+            own_dim += peer_feature_count(cfg.num_drones)
+        dim = own_dim * (cfg.num_drones if self.central else 1)
         if self.model.observation_space.shape != (dim * self.n_stack,):
             raise ValueError("Checkpoint observation layout does not match the room contract")
-        if not self.manifest["agent"].get("central", False):
-            raise ValueError("This adapter expects a central room policy")
+        if self.model.action_space.shape != (5 * (cfg.num_drones if self.central else 1),):
+            raise ValueError("Checkpoint action layout does not match the room contract")
         self.lo, self.hi = -np.asarray(cfg.rc.rc_limit), np.asarray(cfg.rc.rc_limit)
         if cfg.rc.use_envelope:
             import yaml
@@ -126,7 +138,8 @@ class RoomPolicy:
         self.landing = np.zeros(d, bool)
         self.dwell = np.zeros(d)
         self.votes = np.zeros(d, int)
-        self.history = np.zeros(self.model.observation_space.shape, np.float32)
+        shape = self.model.observation_space.shape if self.central else (d, *self.model.observation_space.shape)
+        self.history = np.zeros(shape, np.float32)
         self._steps = 0
 
     def step(self, feed):
@@ -145,10 +158,12 @@ class RoomPolicy:
             self.at_waypoint |= (
                 near & fresh & ~self.landing & trusted & (np.linalg.norm(v, axis=-1) <= cfg.waypoint_max_speed)
             )
-        observation = build_observation(cfg, feed, self.actions, self.at_waypoint, self.landing).reshape(-1)
+        observation = build_observation(cfg, feed, self.actions, self.at_waypoint, self.landing)
+        if self.central:
+            observation = observation.reshape(-1)
         frame = self.normalizer.normalize_obs(observation) if self.normalizer is not None else observation
         # SB3 zeros the absent NORMALIZED frames on reset. Normalizing raw zero padding is wrong.
-        self.history = np.concatenate([self.history[len(frame) :], frame]).astype(np.float32)
+        self.history = np.concatenate([self.history[..., frame.shape[-1]:], frame], axis=-1).astype(np.float32)
         action, _ = self.model.predict(self.history, deterministic=True)
         self.actions = np.clip(action.reshape(cfg.num_drones, 5), -1, 1)
         dt = cfg.sim.dt * cfg.decimation
@@ -183,7 +198,7 @@ class RoomPolicy:
             "land_request": land.tolist(),
             "land_ready": ready.tolist(),
             "action": self.actions.tolist(),
-            "observation": observation.tolist(),
+            "observation": observation.reshape(-1).tolist(),
         }
 
 
