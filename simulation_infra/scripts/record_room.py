@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 parser = argparse.ArgumentParser(description="Record an AS-Tello-Room-v0 video.")
-parser.add_argument("--task", choices=["AS-Tello-Room-v0", "AS-Tello-Room-Single-v0"], default="AS-Tello-Room-v0")
+parser.add_argument("--task", choices=["AS-Tello-Room-v0", "AS-Tello-Room-Single-v0", "AS-Tello-Room-Team-v0", "AS-Tello-Room-Peer-v0"], default="AS-Tello-Room-v0")
 parser.add_argument("--pilot", choices=["policy", "zero"], default="policy")
 parser.add_argument("--checkpoint", type=str, default=None,
                     help="SB3 model .zip (default: newest checkpoint of the newest run under logs/sb3/<task>).")
@@ -231,7 +231,8 @@ def main() -> int:
         cfg.fixed_spot_index = args.pads[0]
     env = gym.make(TASK, cfg=cfg)
     u = env.unwrapped
-    base_venv = (Sb3SharedPolicyVecEnv if args.independent_drones else Sb3CentralVecEnv)(env)
+    shared = bool(args.independent_drones) or (args.pilot == "policy" and not agent_cfg.get("central", False))
+    base_venv = (Sb3SharedPolicyVecEnv if shared else Sb3CentralVecEnv)(env)
     venv = base_venv
 
     head = args.label
@@ -263,6 +264,7 @@ def main() -> int:
         u._wp_markers.set_visibility(False)
     venv.seed(args.seed)  # exporting PPO restores its training seed; reseed before recording
     obs = venv.reset()
+    u.episode_length_buf[:] = 0  # explicit resets stagger training clocks; recordings need a full attempt
     if args.independent_drones:
         batch = act(obs)
         with torch.inference_mode():
@@ -297,6 +299,7 @@ def main() -> int:
         if args.pads and ep > 0:
             cfg.fixed_spot_index = args.pads[ep]
             obs = venv.reset()
+            u.episode_length_buf[:] = 0
         pad_label = f"   pad {args.pads[ep]}" if args.pads else ""
         ep_head = f"{head}{pad_label}   attempt {ep + 1}/{args.episodes}"
         steps, ret, done, rec = 0, 0.0, False, None
@@ -330,6 +333,7 @@ def main() -> int:
         else:
             short = f"cut at {max_s:.0f} s"
             obs = venv.reset()
+            u.episode_length_buf[:] = 0
         line = f"episode {ep + 1}{pad_label}: {short}, {steps * u.step_dt:.1f} s, team return {ret:+.0f}"
         summary.append(line)
         print(f"[rec] {line}", flush=True)
@@ -340,9 +344,20 @@ def main() -> int:
                 if os.path.exists(last):
                     break
                 u.sim.render()  # the capture is async; let it land before copying
+            hold_rec = copy.deepcopy(rec)
+            if done:
+                # The last image precedes the auto-reset. Use the terminal record for
+                # the result panel so the last touchdown is not still labelled LANDING.
+                hold_rec.update(t=steps * u.step_dt, ret=ret)
+                terminal = episode_reports[-1]["record"]
+                for row, drone in zip(hold_rec["drones"], terminal.get("drones", [])):
+                    if drone["landed"]:
+                        accuracy = "on spot" if drone["land_ok"] else "OFF spot"
+                        row.update(phase=f"LANDED {accuracy} ({100 * drone['touchdown_error_m']:.0f} cm)",
+                                   lost=False, rc=[0, 0, 0, 0])
             for _ in range(hold):
                 shutil.copyfile(last, os.path.join(args.frame_dir, f"frame_{frame:05d}.png"))
-                records[frame], results[frame] = rec, short
+                records[frame], results[frame] = hold_rec, short
                 frame += 1
 
     for _ in range(120):
@@ -375,6 +390,7 @@ def main() -> int:
         report = {
             "video": args.out, "seed": args.seed, "num_drones": cfg.num_drones,
             "independent_single_drone_actors": bool(args.independent_drones),
+            "shared_peer_policy": shared and not bool(args.independent_drones),
             "same_physics_environment": True, "config_source": args.config_source,
             "overrides": args.set, "checkpoint": str(ckpt) if args.pilot == "policy" else None,
             "checkpoint_sha256": hashlib.sha256(ckpt.read_bytes()).hexdigest() if args.pilot == "policy" else None,
