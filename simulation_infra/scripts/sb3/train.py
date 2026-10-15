@@ -34,6 +34,8 @@ parser.add_argument("--action-std", type=float, default=None,
                     help="Explicitly reset Gaussian exploration std on warm start; deterministic actions are unchanged.")
 parser.add_argument("--value-scale", type=float, default=None,
                     help="On warm start, scale critic predictions to new reward units; actor is unchanged.")
+parser.add_argument("--critic-warmup-iterations", type=int, default=0,
+                    help="Fit the critic for this many initial rollouts before updating a resumed actor.")
 parser.add_argument("--config-source", choices=("checkpoint", "current"), default="checkpoint",
                     help="On resume, restore the saved configuration or explicitly use the current task.")
 parser.add_argument("--max_iterations", type=int, default=None, help="PPO iterations (rollout + update cycles).")
@@ -44,6 +46,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 if (args_cli.action_std is not None or args_cli.value_scale is not None) and not args_cli.checkpoint:
     parser.error("Warm-start adjustments require --checkpoint")
+if args_cli.critic_warmup_iterations < 0 or (args_cli.critic_warmup_iterations and not args_cli.checkpoint):
+    parser.error("Critic warmup requires --checkpoint and a nonnegative iteration count")
 if args_cli.video:
     args_cli.enable_cameras = True
 sys.argv = [sys.argv[0]] + hydra_args
@@ -51,18 +55,6 @@ sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-
-def cleanup_pbar(*args):
-    """Stop training and close the progress bar cleanly on ctrl+c."""
-    import gc
-
-    for obj in gc.get_objects():
-        if "tqdm_rich" in type(obj).__name__:
-            obj.close()
-    raise KeyboardInterrupt
-
-
-signal.signal(signal.SIGINT, cleanup_pbar)
 
 """Rest everything follows."""
 
@@ -78,6 +70,8 @@ from action_space_kit.rl.finetune import prepare_finetune
 from action_space_kit.rl.policy_export import norm_path_for
 from action_space_kit.rl.run_config import restore_run_config, snapshot_run
 from action_space_kit.rl.sb3_shared import LogExtrasCallback, Sb3CentralVecEnv, Sb3SharedPolicyVecEnv
+from action_space_kit.rl.team_transfer import CriticWarmupCallback
+from action_space_kit.rl.training_control import GracefulStopCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import VecFrameStack, VecNormalize
@@ -90,6 +84,10 @@ from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
+
+stop_callback = GracefulStopCallback()
+signal.signal(signal.SIGINT, stop_callback.request_stop)
+signal.signal(signal.SIGTERM, stop_callback.request_stop)
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -207,9 +205,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[resume] Starting at {agent.num_timesteps} transitions")
     else:
         agent = PPO(policy_arch, env, verbose=1, tensorboard_log=log_dir, **agent_cfg)
+    agent.verbose = 1  # a transferred artifact may have inherited silent inference verbosity
     if args_cli.action_std is not None or args_cli.value_scale is not None:
         prepare_finetune(agent, args_cli.action_std, args_cli.value_scale)
         print(f"[warm-start] action_std={args_cli.action_std}; value_scale={args_cli.value_scale}")
+    if args_cli.critic_warmup_iterations:
+        callbacks.append(CriticWarmupCallback(args_cli.critic_warmup_iterations))
 
     # CheckpointCallback counts vec-env steps (one per iteration step), not transitions
     callbacks.append(
@@ -222,7 +223,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         )
     )
     with contextlib.suppress(KeyboardInterrupt):
-        agent.learn(total_timesteps=n_timesteps, callback=callbacks, progress_bar=True, log_interval=1,
+        agent.learn(total_timesteps=n_timesteps, callback=[stop_callback, *callbacks], progress_bar=True, log_interval=1,
                     reset_num_timesteps=args_cli.checkpoint is None)
 
     agent.save(os.path.join(log_dir, "model"))
