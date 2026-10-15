@@ -593,3 +593,404 @@ telemetry velocity units and camera/map/body axes before fitting. The historical
 command envelope (no positive up) is insufficient for this task; do not blindly enable it and
 make climbing impossible. No updated dynamics fit should replace the current one until those
 data gaps and held-out residuals have been checked.
+
+## Four drones together: retain the learned single-drone policy
+
+### Qualified shared policy (2026-10-14)
+
+The selected `AS-Tello-Room-Peer-v0` policy completed **1,019/1,024 held-out full-room
+trials successfully (99.5117%)**. A success requires all four drones to land accurately
+on four distinct assigned pads in the same room, without collision, crash or timeout.
+There were five collision failures, no crashes, no off-pad trials, and no timeouts.
+All 24 assignment permutations were covered. The observed rate's 95% Wilson interval
+is 98.86–99.79%; this establishes the reported simulation result, not real-flight reliability.
+
+| Reserved seed | Complete trials | All-four successes | Collisions |
+| --- | --- | --- | --- |
+| 17291 | 256 | 253 | 3 |
+| 41423 | 256 | 256 | 0 |
+| 89519 | 256 | 255 | 1 |
+| 130073 | 256 | 255 | 1 |
+
+Successful trials averaged 17.68 s. Across their 4,076 drone touchdowns, mean error
+was 9.41 cm, the 95th percentile was 16.86 cm, and the maximum was 26.05 cm against
+the unchanged 30 cm acceptance radius. The smallest separation in a successful
+trial was 27.25 cm; collision detection ran at 500 Hz with a 25 cm threshold.
+
+The frozen package is tracked in
+[`policies/four_drone_room/qualified_four_drone_policy.zip`](../policies/four_drone_room/qualified_four_drone_policy.zip).
+It includes the selected checkpoint, matching normalizer, configuration, assets,
+per-trial evaluation records, source snapshots, checksums, and four-drone demo video.
+From `simulation_infra/`, extract it before running the commands below:
+
+```bash
+python -m zipfile -e ../policies/four_drone_room/qualified_four_drone_policy.zip outputs
+```
+
+The archive SHA-256 is
+`7b2a41d75b0795462c9b828bc57fcd4a268457c58353ce8bf931bda09c8f52cd`.
+Its embedded guide preserves the qualification-time documentation; this repository
+guide includes the subsequent packaging instructions.
+
+Use `outputs/qualified_four_drone_policy/model.zip` with its matching
+`model_vecnormalize.pkl`, `params/`, and `assets/`. The package pins stage-5 rollout 10
+(`model_84760576_steps.zip`), selected after 381/384 development successes and before
+any reserved trial ran. It contains the qualification reports, evaluation-source archive,
+independent record audit, inference-pipeline log, and preservation audit. Training was
+stopped after selection; the original solo checkpoint and its normalizer remain unchanged.
+
+This is one policy shared by four drones: each receives 48 features across eight
+frames (384 inputs) and emits five actions every 74 ms (13.51 Hz). A frozen 256×256
+original pilot is combined with a learned 128×128 correction and bounded Gaussian
+means. Peer inputs use the saved version-2 ordering. The saved landing/takeoff controller,
+room geometry, noisy delayed sensing, domain randomization, and 75 s limit are retained.
+
+```bash
+python -u scripts/sb3/play.py --headless --task AS-Tello-Room-Peer-v0 \
+  --checkpoint outputs/qualified_four_drone_policy/model.zip \
+  --num_envs 128 --episodes 128 --seed 123 --report outputs/qualified_replay.json \
+  env.collision_substeps=True > outputs/qualified_replay.log 2>&1
+```
+
+The four reserved seeds above have now been consumed for this qualification. Further
+policy tuning requires a fresh untouched qualification set. The following sections
+document the transfers and development experiments that led to the selected policy.
+
+The packaged `demo.mp4` records four drones together in one physics room on seed 7.
+It completed four accurate landings in 17.464 s, with 0.5035 m minimum separation
+and 6.31 cm mean touchdown error. The departure, approach, landing and terminal
+result frames were visually checked, including all four final HUD landing statuses.
+
+### Initial centralized transfer
+
+`AS-Tello-Room-Team-v0` uses the same room, 6–7 m start range, takeoff,
+25-feature per-drone observation, and landing gate, with four drones in each room.
+The central wrapper concatenates their observations and emits all four action sets:
+100 features per frame, 8 frames (800 inputs), and 20 outputs. Each simulated drone
+still receives a decision every 74 ms. This is centralized PPO, not MAPPO.
+
+Expand a selected full-mission checkpoint before training; changing `num_drones` on
+the original checkpoint cannot change its network dimensions safely:
+
+```bash
+python -u scripts/sb3/expand_room_policy.py \
+  --checkpoint outputs/full_mission_candidate/model.zip \
+  --out outputs/team_from_full_mission > outputs/team_transfer.log 2>&1
+python -u -m unittest discover -s tests -p 'test_*.py' > outputs/team_cpu_tests.log 2>&1
+python -u scripts/check_room_env.py --headless --task AS-Tello-Room-Team-v0 \
+  --num_envs 128 > outputs/check_room_team.log 2>&1
+```
+
+Require `TEAM TRANSFER PASSED`, successful CPU tests, and `ALL CHECKS PASSED`.
+The transfer preserves the parent's weights and input normalization in four network
+blocks. Cross-drone weights initially equal zero but remain trainable. A 256×256
+parent becomes a 1024×1024 actor and critic. Frame ordering, raw actor outputs,
+critic values, normalization, reset padding, and serialization are checked.
+The normalized joint reward uses mean per-drone units; the initial critic predicts
+the mean of the parent's four value estimates. The original artifact is unchanged.
+
+The expanded artifact is an **untrained coordination initialization**, not a successful
+four-drone policy. Measure it with `sb3/play.py --task AS-Tello-Room-Team-v0`, then
+fine-tune using `sb3/train.py --task AS-Tello-Room-Team-v0 --checkpoint ...`.
+Keep the matching normalizer with each checkpoint. Use frozen normalization during
+initial fine-tuning so the transferred navigation behavior retains its input scale.
+The joint critic initially estimates independent returns; fit it before updating the
+flight actor, then use small PPO updates. For example:
+
+```bash
+python -u scripts/sb3/train.py --headless --task AS-Tello-Room-Team-v0 \
+  --checkpoint outputs/team_from_full_mission/model.zip --num_envs 512 \
+  --max_iterations 30 --save_interval 10 --seed 52 --action-std 0.10 \
+  --critic-warmup-iterations 4 agent.learning_rate=3e-6 \
+  agent.n_minibatches=16 agent.target_kl=0.01 > outputs/train_team_conservative.log 2>&1
+python -u scripts/check_policy_pipeline.py --headless \
+  --checkpoint outputs/team_from_full_mission/model.zip > outputs/check_team_policy_pipeline.log 2>&1
+```
+
+The pipeline check compares observations, actions and RC commands through forced
+resets, then isolates the landing gates with controlled hover-over-pad fixtures.
+It does not establish full-room collision avoidance; use complete flight evaluations
+for that. Training success rates also cannot replace a fixed evaluation cohort.
+
+Report joint success (all four accurate landings without violations), collision/crash
+rates, timeouts, minimum separation, per-pad touchdown errors, and completion time
+on held-out seeds. Record an actual shared physics room with `record_room.py --task
+AS-Tello-Room-Team-v0`; `--independent_drones` is only for the original single-policy
+baseline. Do not interpret four individually successful flights as a joint success.
+
+### Peer-motion inputs and predictive separation training
+
+`AS-Tello-Room-Peer-v0` retains the original 25 values and appends 23 estimated-state
+features per drone: heading-frame velocity (3), maximum position/velocity standard
+deviation (2), and the other three drones' relative positions and velocities (18).
+Neighbor slots follow ascending drone index, excluding self. The central policy has
+48 × 4 × 8 = 1,536 inputs and the same 20 action outputs. Both actor and critic retain
+the trained 1024×1024 hidden layers. `core/team_features.py` supplies the identical
+NumPy/Torch feature calculation to the offline adapter and simulator; no true velocity
+or position is added to the actor input.
+
+```bash
+python -u scripts/sb3/extend_team_observations.py \
+  --checkpoint logs/sb3/AS-Tello-Room-Team-v0/<selected-run>/model.zip \
+  --out outputs/peer_from_team30 > outputs/peer_transfer.log 2>&1
+python -u scripts/check_room_env.py --headless --task AS-Tello-Room-Peer-v0 \
+  --num_envs 128 > outputs/check_peer_room.log 2>&1
+python -u scripts/check_policy_pipeline.py --headless \
+  --checkpoint outputs/peer_from_team30/model.zip > outputs/check_peer_pipeline.log 2>&1
+```
+
+Require `PEER TRANSFER PASSED`, `ALL CHECKS PASSED`, and `POLICY PIPELINE PASSED`.
+The appended first-layer columns start at zero. Existing input statistics, outputs,
+critic predictions, and reset padding are preserved; new metre/m/s/std inputs use
+fixed unit scaling. The artifact includes the parent configuration and current
+source snapshot. Transfer alone does not teach collision avoidance.
+
+The peer task adds an optional reward cost for predicted close approaches. From
+relative position and velocity, calculate the closest approach within 1.5 seconds.
+The cost grows below a predicted 0.5 m separation and decays with time to that
+approach; its default weight is -100 per second. It uses true simulator motion only
+for the training reward. This is a learning signal, not a collision-avoidance override
+or safety guarantee. Existing room tasks default to zero weight, preserving their
+reward behavior. Collision termination remains at 0.25 m.
+
+Relative neighbor position and velocity are also used in
+[Huang et al., ICRA 2024](https://arxiv.org/html/2309.13285v2). Their results motivate
+providing those features explicitly; they do not validate this Tello implementation.
+Our predictive reward and its numerical settings are experiment choices.
+
+For diagnosis, `sb3/play.py ... env.log_terminal_state=True` adds terminal true and
+estimated motion, estimator variances, and takeoff/landing state to evaluation records.
+This flag affects logging only. Inspect full
+cohorts, including collisions, crashes, off-pad landings and timeouts; reserve fresh
+seeds for final qualification. A higher training reward is not sufficient evidence
+of improved flight reliability.
+
+### Shared peer-aware policy
+
+The same peer task can train one network shared by all four drones. Each drone gets
+its own 48-feature observation and eight-frame history (384 inputs), then produces
+five actions. All four act simultaneously in the same physics room. The shared
+wrapper supplies per-drone rewards and experiences to PPO; there is no centralized
+critic. This alternative retains the original single-drone 256×256 actor and critic.
+
+```bash
+python -u scripts/sb3/extend_team_observations.py --shared \
+  --checkpoint outputs/full_mission_candidate/model.zip \
+  --out outputs/shared_peer_from_full_mission > outputs/shared_peer_transfer.log 2>&1
+python -u scripts/check_policy_pipeline.py --headless \
+  --checkpoint outputs/shared_peer_from_full_mission/model.zip > outputs/check_shared_peer_pipeline.log 2>&1
+python -u scripts/sb3/train.py --headless --task AS-Tello-Room-Peer-v0 \
+  --checkpoint outputs/shared_peer_from_full_mission/model.zip --num_envs 512 \
+  --max_iterations 80 --save_interval 10 --seed 74 --action-std 0.10 \
+  --critic-warmup-iterations 4 agent.learning_rate=1e-5 \
+  agent.n_minibatches=32 agent.target_kl=0.01 agent.ent_coef=0.0 \
+  > outputs/train_shared_peer_stage1.log 2>&1
+```
+
+This initialization sets `agent.central=False`, `peer_sort_by_distance=True`, and
+`collision_substeps=True`. The three neighbor slots are ordered nearest first from
+estimated positions, so drone identifiers do not define their meaning. New input
+weights start at zero and the original policy outputs are checked before training.
+New transfers save `peer_order_version=2`: distances are ordered using world-axis
+positions rounded to integer millimeters, with drone index breaking ties. Actual
+observation values remain unrounded. This prevents symmetric starts from producing
+different neighbor slots in NumPy/CPU and torch/CUDA because of trigonometric
+roundoff. Saved runs without this field retain version 1 for historical replay.
+The optimizer and coordination transition count start fresh; the learned weights,
+normalization, full-room starts, sensing, dynamics and landing criteria are retained.
+With 512 rooms, each rollout contains 512 × 4 × 256 = 524,288 per-drone transitions.
+Compare physical room trials rather than raw transition counts between architectures.
+
+`sb3/play.py`, `record_room.py`, and the offline `RoomPolicy` adapter select shared
+or central inference from the artifact's saved configuration. A shared peer policy
+still requires estimated telemetry for every drone; sharing the network does not
+remove that observation requirement. It has no scripted yielding or action filter.
+
+### Learn corrections in command space
+
+The unsquashed Gaussian pilot can produce means well outside the command limits.
+A forward mean near 2 with standard deviation 0.1 produces nearly identical clipped
+maximum-forward samples. This restricts exploration of braking, even with peer inputs.
+Use `sb3/play.py --action-diagnostics --steps 120 ...` for a short probe of raw means
+during flying states. A capped probe keeps `complete=false` if its episode cohort is
+unfinished and must never be reported as a reliability score.
+
+`initialize_residual_policy.py` adds a 128×128 learned correction network to the
+shared peer pilot. Its mean is `clip(base_mean, -1, 1) + correction`; Gaussian noise
+and the existing final action limits follow. The base 256×256 flight actor stays
+frozen, the correction head starts at zero, and the critic remains trainable. Initial
+deterministic commands match the parent exactly, while stochastic exploration can
+now produce slower commands near a saturated base output. This is an experimental
+learned policy architecture, with no scripted yielding rule or collision override.
+
+```bash
+python -u scripts/sb3/initialize_residual_policy.py \
+  --checkpoint outputs/shared_peer_from_full_mission/model.zip \
+  --out outputs/residual_from_full_mission > outputs/residual_transfer.log 2>&1
+python -u scripts/check_policy_pipeline.py --headless \
+  --checkpoint outputs/residual_from_full_mission/model.zip > outputs/check_residual_pipeline.log 2>&1
+python -u scripts/sb3/train.py --headless --task AS-Tello-Room-Peer-v0 \
+  --checkpoint outputs/residual_from_full_mission/model.zip --num_envs 512 \
+  --max_iterations 80 --save_interval 10 --seed 85 --action-std 0.10 \
+  --critic-warmup-iterations 4 agent.learning_rate=1e-4 \
+  agent.n_minibatches=32 agent.target_kl=0.01 agent.ent_coef=0.0 \
+  > outputs/train_residual_stage1.log 2>&1
+```
+
+Require `RESIDUAL TRANSFER PASSED`, the residual CPU tests, and
+`POLICY PIPELINE PASSED` before training. Tests cover preservation of commands,
+nonzero braking gradients, frozen base weights, critic warmup, isolated checkpoint
+reload/resave, and TorchScript export. The small custom policy classes are embedded
+in the checkpoint so CPU inference does not need Isaac Lab imports. The matching
+normalizer and saved observation configuration are still required.
+
+This uses the general idea of learning an additive correction described in
+[Residual Policy Learning](https://arxiv.org/abs/1812.06298); our base is a learned
+flight policy, and the command-clipping choice addresses this project's measured
+saturation. That research does not establish this implementation's reliability.
+
+Inspect every failure type before continuing. In the first residual experiment,
+side-boundary crashes increased while their individual penalty was much smaller
+than a two-drone collision's combined penalty. The next experiment resumes that
+checkpoint with `env.rew_violation=-2000.0` and two critic-warmup iterations. This
+changes the training incentive; the room boundaries and evaluation criteria stay
+fixed. It is not evidence that the revised policy succeeds until evaluation passes.
+
+Completed stage-2 development evaluations (2026-10-14), using deterministic actions,
+randomized dynamics and sensing, full-room floor starts, and 500 Hz collision checks:
+
+| Checkpoint rollout | Development seed | Complete trials | All-four successes | Collisions | Crashes |
+| --- | --- | --- | --- | --- | --- |
+| 10 | 123 | 128 | 58 (45.3%) | 68 | 2 |
+| 20 | 123 | 128 | 92 (71.9%) | 35 | 1 |
+| 30 | 456 | 256 | 219 (85.5%) | 36 | 1 |
+| 40 | 123 | 128 | 119 (93.0%) | 8 | 1 |
+| 60 | 456 | 256 | 242 (94.5%) | 13 | 1 |
+| Final after 80 | 123 | 128 | 123 (96.1%) | 4 | 1 |
+| Final after 80 | 456 | 256 | 249 (97.3%) | 5 | 2 |
+
+There were no timeouts in these cohorts. At rollout 30, one collision also registered
+a crash, and one other trial landed off its pad; failure categories can overlap.
+Matched-seed comparisons verify identical starts and pad assignments. Rollout 60
+fixed 23 failures from rollout 30 without losing a previous success. All 13 remaining
+collisions occurred within the first eight seconds. These were development results;
+at that stage, the reserved qualification had not run and the 99% target had not been met.
+
+The final stage-2 model completed 372/384 development trials successfully (96.875%):
+nine collisions and three side-boundary crashes, all within the first six seconds.
+It had no off-pad landings or timeouts. Stage 3 resumes this model with doubled
+collision (`-2000`), crash (`-4000`), and predictive-proximity (`-200` per second) costs,
+with two critic-warmup iterations. The physical challenge is unchanged. This next
+reward experiment is not qualified until its own complete evaluations pass.
+
+Stage-3 rollout 40 completed 126/128 trials on development seed 123 (98.4375%),
+with two early collisions and no crashes, missed landings or timeouts. It fixed
+three stage-2 failures without losing a previous success on those same trials.
+A copy migrated to peer-order version 2 passed the simulator/adapter pipeline
+check and repeated the 126/128 result. These scores use the same development
+cohort and must not be combined as independent trials.
+The migrated copy also scored 252/256 on development seed 456: together it completed
+378/384 trials (98.4375%), with five collisions and one boundary crash. Successful
+flights averaged 16.51 s and 8.66 cm touchdown error. This is the best completed
+two-cohort development result at this checkpoint; it still falls short of 99%.
+
+Reports use `outputs/residual_stage2_<rollout|final>_strict_seed<seed>.json`. The best
+stage-2 checkpoint is `model.zip` in `2026-10-14_20-51-13`, with its matching
+`model_vecnormalize.pkl`. Rollout-60's frozen pilot and normalization statistics
+were checked against the original initialization. A separate seed-7 recording of
+rollout 40 completed four accurate landings in 22.274 s, with 0.385 m minimum separation.
+Use the `overview` camera; the `side` camera is obstructed by the room's left wall.
+
+New training processes handle SIGINT/SIGTERM by setting a stop request, then return
+from PPO at a callback boundary to save the model and normalization. Raising an
+exception directly in the signal handler can be swallowed inside an Isaac physics
+callback. Require the final save messages and reloadable artifacts after stopping.
+
+### Controlled residual-policy migrations
+
+`prepare_residual_candidate.py` creates a separate candidate while retaining every
+parameter tensor, the frozen base pilot, critic and matching normalization. It accepts
+final or numbered checkpoints. `--stable-peer-order` saves ordering version 2;
+`--bound-mean` additionally changes the Gaussian mean to
+`tanh(clip(base_mean, -1, 1) + correction)`. The Gaussian noise and final action limits
+are unchanged. Bounded means are an experiment intended to preserve braking
+exploration after corrections have grown. They change deterministic commands;
+an activation change alone does not establish a reliability improvement.
+
+```bash
+python -u scripts/sb3/prepare_residual_candidate.py \
+  --checkpoint <parent-run>/model.zip --out outputs/stable_candidate \
+  --stable-peer-order > outputs/stable_candidate_transfer.log 2>&1
+python -u scripts/check_policy_pipeline.py --headless \
+  --checkpoint outputs/stable_candidate/model.zip > outputs/stable_candidate_pipeline.log 2>&1
+```
+
+Require `RESIDUAL CANDIDATE TRANSFER PASSED` and `POLICY PIPELINE PASSED`, then
+evaluate a complete cohort before training or selecting the candidate. Compare
+ordering-only and bounded-mean candidates from the same checkpoint on the same
+development trials so their effects can be distinguished. Keep the parent's
+checkpoint, configuration and scores separate from either migration.
+The initial bounded-mean copy of stage-3 rollout 40 scored 125/128 on seed 123,
+with three collisions versus two for the ordering-only copy. It was not promoted;
+changing the activation alone did not improve this cohort.
+
+The ordering-only rollout-60 copy later scored 376/384 across the same two cohorts,
+so rollout 40 remained the reference for that stage. Stage 3 was stopped gracefully
+and its final state saved separately for evaluation. Stage 4 trained the bounded-mean rollout-40
+copy with 512 rooms, seed 118, learning rate `5e-5`, initial action standard deviation
+`0.10`, and two critic-warmup iterations. The stage-3 avoidance costs are retained.
+This tests learning with bounded means; the 125/128 pretraining score does not
+establish that the new training run improves reliability.
+
+The first stage-4 checkpoint completed 380/384 development trials (98.9583%):
+125/128 on seed 123 and 255/256 on seed 456, with four collisions and no crashes,
+missed landings or timeouts. Successful flights averaged 18.22 s and 9.02 cm touchdown
+error. This improves the combined development score but must not be rounded up to
+a 99% pass. Its pipeline check passed, and an artifact audit verified the frozen
+pilot, unchanged observation/return normalization, original checkpoint hash, and
+unchanged physical and landing challenge. The artifact is
+`2026-10-14_22-40-40/model_74274816_steps.zip` with its matching numbered normalizer.
+
+All four remaining collisions occurred within 4.15 s after reset. Terminal diagnostics
+show all drones had exited takeoff mode. In two of these collisions, the estimated
+pair separation was approximately 0.50–0.59 m while true separation was 0.23 m.
+The simulation still includes the original video delay of three control steps and Kalman filter;
+the policy must anticipate motion rather than rely on delayed separation alone.
+
+Stage-4 rollout 20 repeated 380/384 with the same four collision cases. The run was
+stopped gracefully, saving its final state separately, and stage 5 resumed the
+evaluated rollout-20 checkpoint. It raised collision cost from `-2000` to `-8000`
+and crash cost from `-4000` to `-16000`, retaining predictive cost `-200` per second,
+learning rate `5e-5`, 512 rooms, and all physical and landing criteria. Four
+critic-warmup iterations let the value network adapt before actor updates. This
+tested whether a greater cost for rare failures encourages more cautious departures.
+Its rollout-10 checkpoint improved development success to 381/384 (99.21875%),
+with three collisions and no crashes, off-pad landings or timeouts. Selection was
+then frozen for the successful reserved qualification summarized above.
+
+### Final joint reliability qualification
+
+New environments check the 0.25 m separation limit at every 2 ms physics step with
+`collision_substeps=True`. Violations are retained until the next policy update,
+including a pair that separates again before that update. Older saved configurations
+retain command-step checking when replayed; explicitly pass
+`env.collision_substeps=True` when comparing them against new candidates. This changes
+collision measurement, not the flight controller or physical dynamics.
+
+Only after development evaluations meet the target, run the reserved qualification:
+
+```bash
+python -u scripts/sb3/qualify_room_policy.py --checkpoint <selected-run>/model.zip \
+  --out outputs/team_qualification > outputs/team_qualification.log 2>&1
+```
+
+This runs 256 full-room trials on each of four reserved seeds (1,024 total), with
+physics-substep collision checks. It verifies the challenge against the preserved
+`outputs/full_mission_candidate/params/run.json`, checks room/sensor/dynamics assets,
+and audits individual records rather than accepting a summary alone. It also retains
+the original landing gates, controller settings and policy decimation. Qualification
+requires at least 99% all-four successes, all 24 drone-to-pad assignments represented,
+full 6–7 m floor starts, and the original 75 s / 0.3 m touchdown criteria. Successful
+trials must have no collisions, crashes or timeouts. The report includes a confidence
+interval; an observed 99% simulation score is not a guarantee of 99% real-flight
+reliability. The evaluation source is archived beside the results.
