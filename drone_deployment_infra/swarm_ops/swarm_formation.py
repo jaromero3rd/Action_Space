@@ -572,7 +572,9 @@ class Drone:
         self.num, self.iface, self.ssid, self.K, self.D = num, iface, ssid, K, D
         self.name, self.fly = f"drone{num}", fly
         self.tag_map, self.sizes, self.mapcheck = tag_map, sizes, mapcheck
-        self.sock = self._sock(9000 + num)
+        # Some Tellos reply only to UDP port 8889 whatever port the command came from.
+        # Per-dongle binding (SO_BINDTODEVICE) keeps the drones' 8889s apart.
+        self.sock = self._sock(8889)
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.frame, self.frame_t, self.frame_id, self.frames, self.packets = None, 0.0, 0, 0, 0
@@ -939,6 +941,28 @@ def face10_vertical(d, p, ty):
     if d.face_h is None or h is None:
         return 0
     return vert_to((d.face_h - h) / 100.0)
+
+
+# drone_gui sets this: write JPEGs here instead of opening OpenCV windows
+FRAME_DIR = os.environ.get("FORMATION_FRAME_DIR", "")
+_frame_t = {}
+
+
+def show(name, img):
+    """cv2.imshow, or (FORMATION_FRAME_DIR set) an atomically replaced JPEG, ~8 per second."""
+    if not FRAME_DIR:
+        cv2.imshow(name, img)
+        return
+    now = time.time()
+    if now - _frame_t.get(name, 0.0) < 0.12:
+        return
+    _frame_t[name] = now
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if ok:
+        path = os.path.join(FRAME_DIR, name.replace(" ", "_") + ".jpg")
+        with open(path + ".tmp", "wb") as f:
+            f.write(buf.tobytes())
+        os.replace(path + ".tmp", path)
 
 
 def rest_gate(resting, err, r_in, r_out):
@@ -1388,9 +1412,9 @@ def main():
                 for i, s_ in enumerate(lines):
                     cv2.putText(img, s_, (10, 30 + 30 * i), 0, 0.7, (0, 0, 0), 4)
                     cv2.putText(img, s_, (10, 30 + 30 * i), 0, 0.7, (0, 255, 255), 2)
-                cv2.imshow(d.name, cv2.resize(img, (480, 360)))
-            cv2.imshow("top view", draw_top(drones, slots, assign, tag_map, mapcheck, now))
-            k = cv2.waitKey(1) & 0xFF
+                show(d.name, cv2.resize(img, (480, 360)))
+            show("top view", draw_top(drones, slots, assign, tag_map, mapcheck, now))
+            k = cv2.waitKey(1) & 0xFF if not FRAME_DIR else 255
             if k == ord("q"):
                 print("q -> landing all")
                 return

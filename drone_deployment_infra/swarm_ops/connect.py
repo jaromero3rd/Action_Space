@@ -6,7 +6,8 @@
   python connect.py --all            # every drone with an ssid in dongles.json
   python connect.py 5 8 --down       # disconnect them
 
-Uses the NetworkManager profiles named TELLO-<n> (created during setup), retries
+Uses the NetworkManager profiles named TELLO-<n> (created here if missing, always pinned
+to that drone's USB dongle from dongles.json, never the laptop WiFi), retries
 each drone up to 3 times (rescanning its adapter in between), then prints a table:
 adapter, SSID, IP. Exit code 0 only if every requested drone is connected.
 """
@@ -53,13 +54,24 @@ def active_ssid(iface):
 def connect(n, entry, result, tries=3):
     iface, ssid, prof = entry["iface"], entry["ssid"], f"TELLO-{n}"
     msg = ""
+    if not iface.startswith("wlx"):
+        result[n] = (False, f"refusing: {iface!r} is not a USB dongle (laptop WiFi is never used)")
+        return
+    code, _ = run(["nmcli", "-g", "connection.id", "con", "show", prof], 10)
+    if code != 0:
+        # Open network, pinned to this drone's dongle, never auto-joined.
+        code, msg = run(["nmcli", "con", "add", "type", "wifi", "ifname", iface, "con-name", prof,
+                         "ssid", ssid, "connection.autoconnect", "no"], 10)
+        if code != 0:
+            result[n] = (False, f"could not create profile '{prof}': {msg.splitlines()[-1] if msg else 'failed'}")
+            return
+    else:
+        run(["nmcli", "con", "modify", prof, "connection.interface-name", iface,
+             "connection.autoconnect", "no"], 10)
     for t in range(1, tries + 1):
-        code, msg = run(["nmcli", "con", "up", prof])
+        code, msg = run(["nmcli", "con", "up", prof, "ifname", iface])
         if code == 0:
             break
-        if "unknown connection" in msg:
-            result[n] = (False, f"no profile '{prof}' (set it up first)")
-            return
         run(["nmcli", "dev", "wifi", "rescan", "ifname", iface], 10)
         time.sleep(2)
     ip, cur = iface_ip(iface), active_ssid(iface)

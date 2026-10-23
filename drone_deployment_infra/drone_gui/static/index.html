@@ -95,12 +95,20 @@ kbd{background:#262b36;border:1px solid var(--line);border-radius:4px;padding:0 
     <input id="t-dest" class="dest" title="host:port, comma-separated" placeholder="127.0.0.1:9100">
     <span class="t-stat" id="t-stat"></span>
   </div>
+  <button id="formdry" title="Run swarm_formation.py on the connected drones WITHOUT taking off (checks links, tags, slots)">Formation dry run</button>
+  <button class="go" id="formfly" title="Run swarm_formation.py for real: connected drones take off, find tag 10, fly to their slots, hold">Formation FLY</button>
   <button id="connectall" title="Connect every drone that isn't connected yet">Connect all</button>
   <button class="go" id="autoall" title="Every connected drone with a target tag: take off (2 s apart), fly to its tag, land in front of it">Auto all</button>
   <button class="land" id="landall" title="Space">LAND ALL <kbd>Space</kbd></button>
   <button class="danger" id="estopall" title="Cuts motors on every drone - they FALL. Click twice.">Motor stop all</button>
 </header>
 
+<section id="form" hidden style="margin:8px 16px;background:#11141a;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+  <div class="row"><b id="form-title">Formation</b><span class="spacer"></span>
+    <button class="land" id="formstop">Land formation</button></div>
+  <div id="form-views" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+  <pre id="form-log" class="msg" style="margin:6px 0 0;white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+</section>
 <h3>Cameras</h3>
 <section id="cams"></section>
 <h3>Controls</h3>
@@ -268,6 +276,7 @@ function render(state) {
   document.getElementById('c-teams').textContent =
     `${ds.filter(d => d.team === 'attack').length} · ${ds.filter(d => d.team === 'defense').length}`;
   renderTelemetry(state.telemetry);
+  renderFormation(state.formation);
   document.getElementById('c-slots-l').textContent = sim ? 'simulated' : (ds.length === 1 ? 'dongle' : 'dongles');
 
   ds.forEach((d, i) => {
@@ -367,6 +376,35 @@ setInterval(() => {
   wasMoving = moving;
 }, 100);
 
+function renderFormation(f) {
+  const box = document.getElementById('form');
+  box.hidden = !f || !f.lines.length;
+  if (box.hidden) return;
+  document.getElementById('form-title').textContent =
+    `Formation ${f.fly ? 'FLY' : 'dry run'}, drones ${f.drones.join(', ')}: ` +
+    (f.running ? 'running (camera tiles are paused, the formation window shows the view)' : `finished (exit ${f.exit})`);
+  document.getElementById('formstop').hidden = !f.running;
+  const views = document.getElementById('form-views');
+  const want = f.running ? f.frames : [];
+  if (views.dataset.names !== want.join(',')) {
+    views.dataset.names = want.join(',');
+    views.innerHTML = want.map(n => `<img data-view="${n}" style="height:${n === 'top_view' ? 360 : 270}px;border-radius:6px;background:#000">`).join('');
+  }
+  const bust = Date.now();
+  views.querySelectorAll('img').forEach(im => { im.src = `/formation/${im.dataset.view}.jpg?t=${bust}`; });
+  const log = document.getElementById('form-log');
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  log.textContent = f.lines.join('\n');
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+async function startFormation(fly) {
+  if (fly && !confirm('Fly the formation with every CONNECTED drone?\n\nSpace clear, drones 1 m+ apart, props guarded?\nPress OK to take off. Land formation / Space lands them.')) return;
+  const res = await fetch('/api/formation', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({fly})});
+  if (!res.ok) alert((await res.json()).error || 'formation failed to start');
+}
+document.getElementById('formdry').onclick = () => startFormation(false);
+document.getElementById('formfly').onclick = () => startFormation(true);
+document.getElementById('formstop').onclick = () => post('/api/formation', {action: 'stop'});
 document.getElementById('connectall').onclick = () => post('/api/connect_all');
 document.getElementById('landall').onclick = () => post('/api/land_all');
 document.getElementById('autoall').onclick = () => post('/api/auto_all');

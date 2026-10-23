@@ -221,26 +221,11 @@ class Drone:
             if ssid and self.ssid != ssid:
                 # Each dongle keeps its own scan list; a freshly powered drone isn't
                 # in it until this dongle rescans.
-                self.msg = f"scanning for {ssid}"
-                subprocess.run(["nmcli", "dev", "wifi", "rescan", "ifname", self.iface],
-                               capture_output=True, timeout=15)
-                for _ in range(10):
-                    time.sleep(1)
-                    scan = subprocess.run(["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "ifname", self.iface,
-                                           "--rescan", "no"], capture_output=True, text=True, timeout=15)
-                    if ssid in scan.stdout.splitlines():
-                        break
-                self.msg = f"joining {ssid} WiFi"
-                res = subprocess.run(["nmcli", "dev", "wifi", "connect", ssid, "ifname", self.iface],
-                                     capture_output=True, text=True, timeout=40)
-                if res.returncode != 0:
-                    # A failed first try is common right after a rescan; try once more.
-                    time.sleep(2)
-                    res = subprocess.run(["nmcli", "dev", "wifi", "connect", ssid, "ifname", self.iface],
-                                         capture_output=True, text=True, timeout=40)
-                    if res.returncode != 0:
-                        self.msg = f"WiFi join failed: {(res.stderr or res.stdout).strip()[:120]}"
-                        return
+                self.msg = f"joining {ssid} on {self.iface}"
+                err = self._join_wifi(ssid)
+                if err:
+                    self.msg = f"WiFi join failed: {err[:120]}"
+                    return
             self.refresh_wifi()
             self.msg = "SDK handshake"
             for _ in range(3):
@@ -257,6 +242,18 @@ class Drone:
             self.msg = f"connect error: {exc}"
         finally:
             self.busy = ""
+
+    def _join_wifi(self, ssid: str) -> str:
+        """Same join as swarm_ops/connect.py: NetworkManager profile TELLO-<n> pinned to this
+        dongle, never the laptop WiFi. '' on success, else why not."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("swarm_connect", DD_ROOT / "swarm_ops" / "connect.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        result: dict = {}
+        mod.connect(self.number if self.number is not None else 0, {"iface": self.iface, "ssid": ssid}, result)
+        ok, info = result.get(self.number if self.number is not None else 0, (False, "no result"))
+        return "" if ok else info
 
     def disconnect(self) -> None:
         if self.flying:
@@ -350,6 +347,15 @@ class Drone:
         self.flying = False
         self.mode = "ground"
         self.msg = "EMERGENCY motor stop sent"
+
+    def release(self) -> None:
+        """Let go of the dongle's ports without touching the drone (another program takes over)."""
+        self.stop.set()
+        for sock in (self.cmd, self.state_sock, self.video_sock):
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def close(self) -> None:
         if self.flying:
