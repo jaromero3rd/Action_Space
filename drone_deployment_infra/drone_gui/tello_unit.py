@@ -244,15 +244,27 @@ class Drone:
             self.busy = ""
 
     def _join_wifi(self, ssid: str) -> str:
-        """Same join as swarm_ops/connect.py: NetworkManager profile TELLO-<n> pinned to this
-        dongle, never the laptop WiFi. '' on success, else why not."""
+        """Same join as swarm_ops/connect.py: NetworkManager profile TELLO-<n> locked to this
+        dongle, never the laptop WiFi. Builds the profile from config/dongles.json if missing.
+        '' on success, else why not."""
         import importlib.util
+        import json
         spec = importlib.util.spec_from_file_location("swarm_connect", DD_ROOT / "swarm_ops" / "connect.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        n = self.number if self.number is not None else 0
+        entry = {"iface": self.iface, "ssid": ssid}
+        try:
+            data = json.loads((CONFIG / "dongles.json").read_text())
+            data = data.get("dongles", []) if isinstance(data, dict) else data
+            entry = next((e for e in data if int(e.get("number", -1)) == n), entry)
+        except (OSError, ValueError):
+            pass
+        if n and entry.get("bssid") and not mod.profile_exists(f"TELLO-{n}"):
+            mod.create({n: entry}, [n])
         result: dict = {}
-        mod.connect(self.number if self.number is not None else 0, {"iface": self.iface, "ssid": ssid}, result)
-        ok, info = result.get(self.number if self.number is not None else 0, (False, "no result"))
+        mod.connect(n, entry, result)
+        ok, info = result.get(n, (False, "no result"))
         return "" if ok else info
 
     def disconnect(self) -> None:
