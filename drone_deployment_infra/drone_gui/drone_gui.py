@@ -28,6 +28,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from formation_runner import FRAME_DIR, FormationRunner
 from tello_unit import DD_ROOT, Drone, load_tag_sizes
 
 sys.path.insert(0, str(DD_ROOT / "core"))
@@ -47,6 +48,8 @@ class Fleet:
         self.tag_sizes = load_tag_sizes()
         self.lock = threading.Lock()
         self.sim = sim
+        self.reserved: set[str] = set()        # dongles handed to swarm_formation.py
+        self.formation = FormationRunner(self)
         self.roles = load_roles()
         self.team_override: dict[str, str] = dict(self.roles["drones"])   # name -> team, set from the GUI
         self.publisher = Publisher(self.telemetry, "sim" if sim else "real", self.roles["destinations"],
@@ -74,7 +77,7 @@ class Fleet:
         here = present_ifaces()
         reg = {d["iface"]: d for d in load_registry(REGISTRY_PATH)["dongles"]}
         with self.lock:
-            for iface in sorted(here - set(self.drones)):
+            for iface in sorted(here - set(self.drones) - self.reserved):
                 entry = reg.get(iface, {})
                 number = entry.get("number")
                 port = entry.get("video_port") or (17100 + len(self.drones))
@@ -82,12 +85,24 @@ class Fleet:
                 drone.target_tag = DEFAULT_TAGS.get(drone.drone)
                 self.drones[iface] = drone
                 print(f"dongle {iface} (#{number}) -> {drone.drone or 'unassigned'}", flush=True)
-            for iface in set(self.drones) - here:
+            for iface in set(self.drones) - here - self.reserved:
                 print(f"dongle {iface} unplugged", flush=True)
                 self.drones.pop(iface).close()
             drones = list(self.drones.values())
         for drone in drones:
             drone.refresh_wifi()
+
+    def release(self, ifaces: list[str]) -> None:
+        """Drop these dongles' drones (sockets closed, drone untouched) so another program can use them."""
+        with self.lock:
+            self.reserved |= set(ifaces)
+            gone = [self.drones.pop(i) for i in ifaces if i in self.drones]
+        for drone in gone:
+            drone.release()
+
+    def unreserve(self, ifaces: list[str]) -> None:
+        with self.lock:
+            self.reserved -= set(ifaces)
 
     def get(self, iface: str) -> Drone | None:
         return self.drones.get(iface)
@@ -120,10 +135,12 @@ class Fleet:
         threading.Thread(target=run, daemon=True).start()
 
     def land_all(self) -> None:
+        self.formation.stop()
         for drone in self.all():
             drone.land("land all")
 
     def close(self) -> None:
+        self.formation.close()
         self.publisher.close()
         threads = [threading.Thread(target=d.close) for d in self.all()]
         for t in threads:
@@ -152,7 +169,15 @@ def make_handler(fleet: Fleet):
             if self.path in ("/", "/index.html"):
                 self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif self.path == "/api/state":
-                self._json({"drones": fleet.states(), "telemetry": fleet.publisher.status(), "t": time.time()})
+                self._json({"drones": fleet.states(), "telemetry": fleet.publisher.status(),
+                            "formation": fleet.formation.status(), "t": time.time()})
+            elif self.path.startswith("/formation/"):
+                name = Path(self.path.split("?")[0]).name        # never a path, just <view>.jpg
+                path = FRAME_DIR / name
+                if name.endswith(".jpg") and path.is_file():
+                    self._send(200, path.read_bytes(), "image/jpeg")
+                else:
+                    self._send(404, b"{}")
             elif self.path.startswith("/video/"):
                 self._mjpeg(self.path.split("/")[2])
             elif self.path.startswith("/snap/"):
@@ -204,14 +229,27 @@ def make_handler(fleet: Fleet):
                     except (ValueError, TypeError) as exc:
                         return self._json({"error": str(exc)}, 400)
                 elif action == "connect_all":
+                    want = {int(n) for n in body.get("drones", [])}   # drone numbers; none = every one
                     for d in fleet.all():
+                        if want and d.number not in want:
+                            continue
                         if not (d.link and d.streaming) and (d.drone or d.ssid):
                             d.connect()
                 elif action == "land_all":
                     fleet.land_all()
                 elif action == "auto_all":
                     fleet.auto_all()
+                elif action == "formation":
+                    if fleet.sim:
+                        return self._json({"error": "formation needs real drones (not --sim)"}, 400)
+                    if body.get("action") == "stop":
+                        fleet.formation.stop()
+                    else:
+                        err = fleet.formation.start([int(n) for n in body.get("drones", [])], bool(body.get("fly")))
+                        if err:
+                            return self._json({"error": err}, 400)
                 elif action == "emergency_all":
+                    fleet.formation.emergency()
                     for d in fleet.all():
                         d.emergency()
                 elif action == "shutdown" and fleet.sim:
