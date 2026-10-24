@@ -79,6 +79,9 @@ def check(entry):
 def connect(n, entry, result, tries=3):
     iface, prof = entry["iface"], f"TELLO-{n}"
     msg = ""
+    if not iface.startswith("wlx"):
+        result[n] = (False, f"refusing: {iface!r} is not a USB dongle (laptop WiFi is never used)")
+        return
     for _ in range(tries):
         code, msg = run(["nmcli", "con", "up", prof])
         if code == 0:
