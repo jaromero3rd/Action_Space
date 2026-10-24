@@ -262,6 +262,9 @@ class Drone:
             pass
         if n and entry.get("bssid") and not mod.profile_exists(f"TELLO-{n}"):
             mod.create({n: entry}, [n])
+        ok, info = mod.check(entry) if entry.get("iface") else (False, "")
+        if ok:                                    # connect.py's fast path: already up, nothing to do
+            return ""
         result: dict = {}
         mod.connect(n, entry, result)
         ok, info = result.get(n, (False, "no result"))

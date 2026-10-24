@@ -229,7 +229,10 @@ def make_handler(fleet: Fleet):
                     except (ValueError, TypeError) as exc:
                         return self._json({"error": str(exc)}, 400)
                 elif action == "connect_all":
+                    want = {int(n) for n in body.get("drones", [])}   # drone numbers; none = every one
                     for d in fleet.all():
+                        if want and d.number not in want:
+                            continue
                         if not (d.link and d.streaming) and (d.drone or d.ssid):
                             d.connect()
                 elif action == "land_all":

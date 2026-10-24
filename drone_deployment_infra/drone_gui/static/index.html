@@ -97,7 +97,8 @@ kbd{background:#262b36;border:1px solid var(--line);border-radius:4px;padding:0 
   </div>
   <button id="formdry" title="Run swarm_formation.py on the connected drones WITHOUT taking off (checks links, tags, slots)">Formation dry run</button>
   <button class="go" id="formfly" title="Run swarm_formation.py for real: connected drones take off, find tag 10, fly to their slots, hold">Formation FLY</button>
-  <button id="connectall" title="Connect every drone that isn't connected yet">Connect all</button>
+  <input id="connect-ids" style="width:90px" placeholder="6 7 9  or  all" title="Like connect.py: drone numbers (the # on each panel), or all">
+  <button id="connectids" title="Connect only the drones listed (numbers from config/dongles.json)">Connect</button>
   <button class="go" id="autoall" title="Every connected drone with a target tag: take off (2 s apart), fly to its tag, land in front of it">Auto all</button>
   <button class="land" id="landall" title="Space">LAND ALL <kbd>Space</kbd></button>
   <button class="danger" id="estopall" title="Cuts motors on every drone - they FALL. Click twice.">Motor stop all</button>
@@ -405,7 +406,17 @@ async function startFormation(fly) {
 document.getElementById('formdry').onclick = () => startFormation(false);
 document.getElementById('formfly').onclick = () => startFormation(true);
 document.getElementById('formstop').onclick = () => post('/api/formation', {action: 'stop'});
-document.getElementById('connectall').onclick = () => post('/api/connect_all');
+const idsBox = document.getElementById('connect-ids');
+try { idsBox.value = localStorage.getItem('connectIds') || ''; } catch (e) {}
+document.getElementById('connectids').onclick = () => {
+  const all = idsBox.value.trim().toLowerCase() === 'all';
+  const drones = all ? [] : idsBox.value.split(/[\s,]+/).filter(Boolean).map(Number).filter(Number.isInteger);
+  if (!all && !drones.length) { alert('Type the drone numbers to connect, e.g. 6 7 9, or all'); return; }
+  try { localStorage.setItem('connectIds', idsBox.value); } catch (e) {}
+  post('/api/connect_all', {drones});
+};
+idsBox.onkeyup = e => e.stopPropagation();
+idsBox.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') document.getElementById('connectids').click(); };
 document.getElementById('landall').onclick = () => post('/api/land_all');
 document.getElementById('autoall').onclick = () => post('/api/auto_all');
 armed(document.getElementById('estopall'), () => post('/api/emergency_all'));
