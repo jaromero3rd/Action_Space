@@ -31,13 +31,14 @@ Ctrl-C lands anything airborne and quits. In `--sim` mode the top bar also has a
 
 | Control | What |
 |---|---|
-| Connect / Disconnect | Join the drone's WiFi on that dongle (`nmcli`), SDK handshake, start video. |
+| Connect / Disconnect | Join the drone's WiFi on that dongle via `swarm_ops/connect.py` (profiles pinned to the dongle, never the laptop WiFi), SDK handshake, start video. |
 | Target tag, Land at (m) | Which AprilTag this drone flies to, and how far in front of it to land. |
 | **Auto: tag → land** | Take off if needed, face the target tag, close to the standoff, land. |
 | Take off / Hover / Land | Manual flight basics. |
 | Click a tile / panel, or `1`-`8` | Select that drone for the keyboard. |
 | Pad / keyboard | Manual sticks on the selected drone: `W/S` fwd/back, `A/D` left/right, `↑/↓` up/down, `Q/E` yaw. Deadman: release and it hovers. |
-| **Connect all** | Connect every assigned drone that isn't linked yet. |
+| **Connect** box | Type drone numbers (`6 7 9`) or `all` and press Connect/Enter. Numbers come from `config/dongles.json`; drones already up are skipped. |
+| **Formation dry run / FLY** | Run `swarm_ops/swarm_formation.py` on the connected drones (dry run: no takeoff). The GUI releases those dongles, shows the script's camera and top views and log in the page, and gets them back when it exits. Formation stops with LAND ALL; Motor stop cuts the motors. |
 | **Auto all** | Auto on every linked drone with a target tag, takeoffs 2 s apart. |
 | **LAND ALL** / `Space` | Land every drone. |
 | Motor stop (click twice) | `emergency`: motors cut, the drone **falls**. Last resort. |
@@ -63,7 +64,7 @@ can't cross.
 2-3 m in front of its own AprilTag (sim i -> tag i, tags 1-9 repeat), slightly off-axis
 and turned. It renders what its camera would see through the real camera matrix. The
 **same** detection, Auto controller and safety code as a real drone run on those frames.
-Use it to check the grid, Connect all / Auto all / LAND ALL, the takeoff stagger, manual
+Use it to check the grid, Connect / Auto all / LAND ALL, the takeoff stagger, manual
 keys, and the lost-tag search. **Reset pose** (sim only) puts a landed drone at a new
 random start. It runs no sockets, so it can run beside the real server on another `--port`.
 
